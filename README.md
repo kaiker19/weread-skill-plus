@@ -8,6 +8,12 @@
 
 ---
 
+## 前置：获取微信读书 API Key
+
+前往 [https://weread.qq.com/r/weread-skills](https://weread.qq.com/r/weread-skills) 获取你的 `WEREAD_API_KEY`，并在 openclaw 中完成配置。
+
+---
+
 ## 安装
 
 ```bash
@@ -56,7 +62,7 @@ weread-skill-plus/
 ├── prompts/
 │   ├── daily_summary.md     # 每日总结 prompt
 │   ├── book_summary.md      # 读后总结 prompt
-│   └── samples.md           # 风格样本（prompt 校准用）
+│   └── samples.example.md   # 风格样本模板（复制为 samples.md 后填入个人内容）
 ├── .agents/skills/
 │   └── weread-skills/       # 官方 WeChat Reading skill（随本 repo 打包）
 └── data/                    # 本地 SQLite（gitignored，运行后自动生成）
