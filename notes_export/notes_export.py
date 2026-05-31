@@ -29,6 +29,15 @@ def api(key, name, payload=None):
         return {"errcode": -1, "errmsg": r.stdout[:200]}
 
 def get_key():
+    if os.environ.get("WEREAD_API_KEY"):
+        return os.environ["WEREAD_API_KEY"]
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("WEREAD_API_KEY="):
+                    return line.split("=", 1)[1].strip()
     with open(os.path.expanduser("~/.openclaw/openclaw.json")) as f:
         return json.load(f)["skills"]["entries"]["weread-skills"]["env"]["WEREAD_API_KEY"]
 
@@ -43,7 +52,7 @@ def get_all_notebooks(key):
     last_sort = None
 
     while True:
-        params = {"count": 20}
+        params = {"count": 100}
         if last_sort:
             params["lastSort"] = last_sort
 

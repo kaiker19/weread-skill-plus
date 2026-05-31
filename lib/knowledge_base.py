@@ -1,0 +1,485 @@
+#!/usr/bin/env python3
+"""
+knowledge_base.py — SQLite knowledge store for weread-skill-plus
+
+Tables:
+  books       — book metadata + reading state
+  highlights  — personal highlights  (/book/bookmarklist)
+  reviews     — personal annotations (/review/list/mine)
+  concepts    — LLM-extracted concept tags (cross-book connections)
+  summaries   — cached daily/book summaries
+  sync_state  — incremental sync cursors
+
+Default DB path: ~/.weread-skill-plus/knowledge.db
+Override via env: WEREAD_KB_PATH
+"""
+
+import os
+import sqlite3
+import time
+from contextlib import contextmanager
+from pathlib import Path
+from typing import List, Optional
+
+
+# ── Path ───────────────────────────────────────────────────────────────────
+
+_SKILL_ROOT = Path(__file__).parent.parent  # lib/ → project root
+DEFAULT_DB_PATH = _SKILL_ROOT / "data" / "knowledge.db"
+
+
+def get_db_path() -> Path:
+    env = os.environ.get("WEREAD_KB_PATH")
+    if env:
+        return Path(env)
+    return DEFAULT_DB_PATH
+
+
+@contextmanager
+def _conn(db_path: Path = None):
+    if db_path is None:
+        db_path = get_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# ── Schema ─────────────────────────────────────────────────────────────────
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS books (
+    book_id         TEXT PRIMARY KEY,
+    title           TEXT NOT NULL DEFAULT '',
+    author          TEXT NOT NULL DEFAULT '',
+    category        TEXT NOT NULL DEFAULT '',
+    cover           TEXT NOT NULL DEFAULT '',
+    progress        INTEGER NOT NULL DEFAULT 0,
+    finish_time     INTEGER,
+    last_read_time  INTEGER,
+    highlight_count INTEGER NOT NULL DEFAULT 0,
+    review_count    INTEGER NOT NULL DEFAULT 0,
+    updated_at      INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS highlights (
+    highlight_id  TEXT PRIMARY KEY,
+    book_id       TEXT NOT NULL REFERENCES books(book_id),
+    content       TEXT NOT NULL,
+    chapter_uid   INTEGER,
+    chapter_title TEXT NOT NULL DEFAULT '',
+    range_val     TEXT NOT NULL DEFAULT '',
+    create_time   INTEGER,
+    synced_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_highlights_book    ON highlights(book_id);
+CREATE INDEX IF NOT EXISTS idx_highlights_created ON highlights(create_time);
+
+CREATE TABLE IF NOT EXISTS reviews (
+    review_id     TEXT PRIMARY KEY,
+    book_id       TEXT NOT NULL REFERENCES books(book_id),
+    content       TEXT NOT NULL,
+    chapter_uid   INTEGER,
+    range_val     TEXT NOT NULL DEFAULT '',
+    create_time   INTEGER,
+    synced_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reviews_book    ON reviews(book_id);
+CREATE INDEX IF NOT EXISTS idx_reviews_created ON reviews(create_time);
+
+CREATE TABLE IF NOT EXISTS concepts (
+    concept_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    tag           TEXT NOT NULL,
+    source_type   TEXT NOT NULL CHECK(source_type IN ('highlight', 'review')),
+    source_id     TEXT NOT NULL,
+    book_id       TEXT NOT NULL REFERENCES books(book_id),
+    created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_concepts_tag  ON concepts(tag);
+CREATE INDEX IF NOT EXISTS idx_concepts_book ON concepts(book_id);
+
+CREATE TABLE IF NOT EXISTS summaries (
+    summary_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    summary_type  TEXT NOT NULL CHECK(summary_type IN ('daily', 'book_completion')),
+    book_id       TEXT,
+    date          TEXT,
+    content       TEXT NOT NULL,
+    created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sync_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"""
+
+
+def init_db(db_path: Path = None):
+    """Create all tables and indexes if they don't exist."""
+    with _conn(db_path) as c:
+        c.executescript(_SCHEMA)
+
+
+# ── Books ──────────────────────────────────────────────────────────────────
+
+def upsert_book(book: dict, db_path: Path = None):
+    """Insert or update a book record. finish_time is never overwritten with NULL."""
+    with _conn(db_path) as c:
+        c.execute("""
+            INSERT INTO books
+              (book_id, title, author, category, cover,
+               progress, finish_time, last_read_time,
+               highlight_count, review_count, updated_at)
+            VALUES (:book_id, :title, :author, :category, :cover,
+                    :progress, :finish_time, :last_read_time,
+                    :highlight_count, :review_count, :updated_at)
+            ON CONFLICT(book_id) DO UPDATE SET
+                title           = excluded.title,
+                author          = excluded.author,
+                category        = excluded.category,
+                cover           = excluded.cover,
+                progress        = excluded.progress,
+                finish_time     = COALESCE(excluded.finish_time, books.finish_time),
+                last_read_time  = excluded.last_read_time,
+                highlight_count = excluded.highlight_count,
+                review_count    = excluded.review_count,
+                updated_at      = excluded.updated_at
+        """, {
+            "book_id":         book["book_id"],
+            "title":           book.get("title", ""),
+            "author":          book.get("author", ""),
+            "category":        book.get("category", ""),
+            "cover":           book.get("cover", ""),
+            "progress":        book.get("progress", 0),
+            "finish_time":     book.get("finish_time"),
+            "last_read_time":  book.get("last_read_time"),
+            "highlight_count": book.get("highlight_count", 0),
+            "review_count":    book.get("review_count", 0),
+            "updated_at":      int(time.time()),
+        })
+
+
+def get_book(book_id: str, db_path: Path = None) -> Optional[dict]:
+    with _conn(db_path) as c:
+        row = c.execute("SELECT * FROM books WHERE book_id=?", (book_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_all_books(db_path: Path = None) -> List[dict]:
+    with _conn(db_path) as c:
+        return [dict(r) for r in c.execute("SELECT * FROM books").fetchall()]
+
+
+def get_newly_finished_books(since_ts: int = None,
+                              db_path: Path = None) -> List[dict]:
+    """Return books where finish_time is set but no book_completion summary exists yet.
+
+    since_ts: if given, only return books whose finish_time >= since_ts.
+              Use this to avoid triggering summaries for books finished long ago
+              on a cold start.
+    """
+    time_clause = "AND b.finish_time >= ?" if since_ts is not None else ""
+    params = (since_ts,) if since_ts is not None else ()
+    with _conn(db_path) as c:
+        rows = c.execute(f"""
+            SELECT b.* FROM books b
+            WHERE b.finish_time IS NOT NULL
+              {time_clause}
+              AND NOT EXISTS (
+                  SELECT 1 FROM summaries s
+                  WHERE s.summary_type = 'book_completion'
+                    AND s.book_id = b.book_id
+              )
+        """, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ── Highlights ─────────────────────────────────────────────────────────────
+
+def insert_highlight(h: dict, db_path: Path = None) -> bool:
+    """Returns True if newly inserted, False if already existed."""
+    with _conn(db_path) as c:
+        cur = c.execute("""
+            INSERT OR IGNORE INTO highlights
+              (highlight_id, book_id, content, chapter_uid, chapter_title,
+               range_val, create_time, synced_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            h["highlight_id"],
+            h["book_id"],
+            h["content"],
+            h.get("chapter_uid"),
+            h.get("chapter_title", ""),
+            h.get("range_val", ""),
+            h.get("create_time"),
+            int(time.time()),
+        ))
+        return cur.rowcount > 0
+
+
+def get_highlights_since(since_ts: int, db_path: Path = None) -> List[dict]:
+    """Get highlights created after since_ts, with book title/author joined."""
+    with _conn(db_path) as c:
+        rows = c.execute("""
+            SELECT h.*, b.title AS book_title, b.author AS book_author
+            FROM highlights h
+            JOIN books b ON h.book_id = b.book_id
+            WHERE h.create_time > ?
+            ORDER BY h.create_time ASC
+        """, (since_ts,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_highlights_for_book(book_id: str, db_path: Path = None) -> List[dict]:
+    with _conn(db_path) as c:
+        rows = c.execute("""
+            SELECT * FROM highlights WHERE book_id=? ORDER BY create_time ASC
+        """, (book_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ── Reviews ────────────────────────────────────────────────────────────────
+
+def insert_review(r: dict, db_path: Path = None) -> bool:
+    """Returns True if newly inserted, False if already existed."""
+    with _conn(db_path) as c:
+        cur = c.execute("""
+            INSERT OR IGNORE INTO reviews
+              (review_id, book_id, content, chapter_uid, range_val,
+               create_time, synced_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            r["review_id"],
+            r["book_id"],
+            r["content"],
+            r.get("chapter_uid"),
+            r.get("range_val", ""),
+            r.get("create_time"),
+            int(time.time()),
+        ))
+        return cur.rowcount > 0
+
+
+def get_reviews_since(since_ts: int, db_path: Path = None) -> List[dict]:
+    """Get reviews created after since_ts, with book title/author joined."""
+    with _conn(db_path) as c:
+        rows = c.execute("""
+            SELECT rv.*, b.title AS book_title, b.author AS book_author
+            FROM reviews rv
+            JOIN books b ON rv.book_id = b.book_id
+            WHERE rv.create_time > ?
+            ORDER BY rv.create_time ASC
+        """, (since_ts,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_reviews_for_book(book_id: str, db_path: Path = None) -> List[dict]:
+    with _conn(db_path) as c:
+        rows = c.execute("""
+            SELECT * FROM reviews WHERE book_id=? ORDER BY create_time ASC
+        """, (book_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ── Concepts ───────────────────────────────────────────────────────────────
+
+def insert_concepts(source_type: str, source_id: str, book_id: str,
+                    tags: List[str], db_path: Path = None):
+    """Store LLM-extracted concept tags for a highlight or review."""
+    now = int(time.time())
+    with _conn(db_path) as c:
+        c.executemany("""
+            INSERT INTO concepts (tag, source_type, source_id, book_id, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, [(tag.strip(), source_type, source_id, book_id, now) for tag in tags if tag.strip()])
+
+
+def find_related_by_concepts(tags: List[str], exclude_book_id: str = None,
+                              limit: int = 5, db_path: Path = None) -> List[dict]:
+    """Find highlights/reviews from other books that share concept tags.
+
+    Returns records sorted by number of matching tags (most overlap first).
+    """
+    if not tags:
+        return []
+    ph = ",".join("?" * len(tags))
+    params = list(tags)
+    exclude_clause = ""
+    if exclude_book_id:
+        exclude_clause = "AND c.book_id != ?"
+        params.append(exclude_book_id)
+    params.append(limit)
+    with _conn(db_path) as c:
+        rows = c.execute(f"""
+            SELECT c.source_type, c.source_id, c.book_id,
+                   b.title AS book_title,
+                   GROUP_CONCAT(c.tag, ', ') AS matched_tags,
+                   COUNT(*) AS match_count
+            FROM concepts c
+            JOIN books b ON c.book_id = b.book_id
+            WHERE c.tag IN ({ph})
+              {exclude_clause}
+            GROUP BY c.source_id
+            ORDER BY match_count DESC
+            LIMIT ?
+        """, params).fetchall()
+
+        results = []
+        for row in rows:
+            r = dict(row)
+            source = None
+            with _conn(db_path) as c2:
+                if r["source_type"] == "highlight":
+                    source = c2.execute(
+                        "SELECT content FROM highlights WHERE highlight_id=?",
+                        (r["source_id"],)
+                    ).fetchone()
+                else:
+                    source = c2.execute(
+                        "SELECT content FROM reviews WHERE review_id=?",
+                        (r["source_id"],)
+                    ).fetchone()
+            if source:
+                r["content"] = source["content"]
+            results.append(r)
+        return results
+
+
+# ── Keyword search (for cross-book echoes) ────────────────────────────────
+
+def search_content(keyword: str, exclude_book_ids: List[str] = None,
+                   before_ts: int = None, limit: int = 3,
+                   db_path: Path = None) -> List[dict]:
+    """LIKE search across highlights and reviews from other books.
+
+    Returns list of dicts with: content, book_title, author, create_time,
+    source_type ('highlight'|'review'), matched_kw.
+    """
+    pattern = f"%{keyword}%"
+    exclude_clause = ""
+    time_clause = ""
+    base_params: List = [pattern]
+
+    if exclude_book_ids:
+        ph = ",".join("?" * len(exclude_book_ids))
+        exclude_clause = f"AND h.book_id NOT IN ({ph})"
+    if before_ts:
+        time_clause = "AND h.create_time < ?"
+
+    with _conn(db_path) as c:
+        hl_params = list(base_params)
+        if exclude_book_ids:
+            hl_params.extend(exclude_book_ids)
+        if before_ts:
+            hl_params.append(before_ts)
+        hl_params.append(limit)
+
+        highlights = c.execute(f"""
+            SELECT h.content, b.title AS book_title, b.author,
+                   h.create_time, 'highlight' AS source_type
+            FROM highlights h
+            JOIN books b ON h.book_id = b.book_id
+            WHERE h.content LIKE ?
+              {exclude_clause.replace('h.book_id', 'h.book_id')}
+              {time_clause}
+            ORDER BY h.create_time DESC
+            LIMIT ?
+        """, hl_params).fetchall()
+
+        rv_clause = exclude_clause.replace("h.book_id", "r.book_id")
+        rv_time   = time_clause.replace("h.create_time", "r.create_time")
+        rv_params = list(base_params)
+        if exclude_book_ids:
+            rv_params.extend(exclude_book_ids)
+        if before_ts:
+            rv_params.append(before_ts)
+        rv_params.append(limit)
+
+        reviews = c.execute(f"""
+            SELECT r.content, b.title AS book_title, b.author,
+                   r.create_time, 'review' AS source_type
+            FROM reviews r
+            JOIN books b ON r.book_id = b.book_id
+            WHERE r.content LIKE ?
+              {rv_clause}
+              {rv_time}
+            ORDER BY r.create_time DESC
+            LIMIT ?
+        """, rv_params).fetchall()
+
+    results = []
+    for row in list(highlights) + list(reviews):
+        d = dict(row)
+        d["matched_kw"] = keyword
+        results.append(d)
+    return results
+
+
+# ── Summaries ──────────────────────────────────────────────────────────────
+
+def save_summary(summary_type: str, content: str,
+                 book_id: str = None, date: str = None,
+                 db_path: Path = None):
+    with _conn(db_path) as c:
+        c.execute("""
+            INSERT INTO summaries (summary_type, book_id, date, content, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (summary_type, book_id, date, content, int(time.time())))
+
+
+def get_latest_summary(summary_type: str, book_id: str = None,
+                        date: str = None, db_path: Path = None) -> Optional[dict]:
+    with _conn(db_path) as c:
+        row = c.execute("""
+            SELECT * FROM summaries
+            WHERE summary_type = ?
+              AND (book_id IS NULL OR book_id = ?)
+              AND (date IS NULL OR date = ?)
+            ORDER BY created_at DESC LIMIT 1
+        """, (summary_type, book_id, date)).fetchone()
+        return dict(row) if row else None
+
+
+# ── Sync State ─────────────────────────────────────────────────────────────
+
+def get_sync_state(key: str, default: str = None, db_path: Path = None) -> Optional[str]:
+    with _conn(db_path) as c:
+        row = c.execute("SELECT value FROM sync_state WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def set_sync_state(key: str, value: str, db_path: Path = None):
+    with _conn(db_path) as c:
+        c.execute("""
+            INSERT INTO sync_state (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """, (key, str(value)))
+
+
+# ── CLI ────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    db_path = get_db_path()
+    init_db(db_path)
+    print(f"OK: database initialized at {db_path}")
+
+    # Quick stats
+    with _conn(db_path) as c:
+        stats = {
+            "books":      c.execute("SELECT COUNT(*) FROM books").fetchone()[0],
+            "highlights": c.execute("SELECT COUNT(*) FROM highlights").fetchone()[0],
+            "reviews":    c.execute("SELECT COUNT(*) FROM reviews").fetchone()[0],
+            "concepts":   c.execute("SELECT COUNT(*) FROM concepts").fetchone()[0],
+            "summaries":  c.execute("SELECT COUNT(*) FROM summaries").fetchone()[0],
+        }
+    for k, v in stats.items():
+        print(f"  {k}: {v}")

@@ -1,0 +1,55 @@
+# weread-skill-plus 进度记录
+
+## 已完成
+- [x] 审查所有自定义 skill 脚本，修复 API key 加载逻辑（支持 .env / 环境变量 / openclaw.json）
+- [x] 删除冗余脚本：qa/ completion_stats/ theme_review/ reading_stats_viz/
+- [x] 重写 ROADMAP.md：需求优先，两类用户，Aha Moment 对应关系，底座选型
+- [x] 调研 stop-slop（hardikpandya/stop-slop）完整内容：SKILL.md + phrases.md + structures.md + examples.md
+- [x] 用户确认反 AI 风格方向正确
+- [x] 创建 prompts/samples.md，记录用户提供的三个核心样本（当前每日总结 / 目标转写风格 / V-Ultimate prompt）
+
+- [x] 起草 prompt 文件：prompts/daily_summary.md + prompts/book_summary.md
+  - 适配中文 AI tells（stop-slop 方法论）
+  - 按书籍类型分叉（论说/文学/实用/历史）
+  - 明确每日总结 vs 读后总结的区别
+- [x] lib/knowledge_base.py — SQLite schema + CRUD，已验证初始化成功
+
+## 关键架构决策
+- 脚本里没有 LLM。执行模型：脚本拉数据+输出 stdout → agent 读取 → agent 的 LLM 用 prompt 合成 → 推送。
+- prompts/ 下的文件是给 agent LLM 的系统指令，不是脚本内部调用。
+- 跨书呼应预筛选用 jieba 分词 + SQL LIKE（保持简单），不引入 embedding。
+- concepts 表暂不使用，作为 Phase 5 优化保留（需 embedding 或 agent 回写）。
+- DB 位置：放 skill 下 data/knowledge.db（env WEREAD_KB_PATH 可覆盖）。未来 web 端应迁移到后端 DB。
+
+## 实施计划（实现 ROADMAP）
+
+### Phase 0 — 底座 ✅
+- [x] lib/knowledge_base.py schema + CRUD
+- [x] DB 默认位置：skill 下 data/knowledge.db（data/ 已加入 .gitignore）
+- [x] lib/sync.py 数据同步层：增量拉取 shelf / bookmarklist / review-list-mine → 写 SQLite + sync_state 游标
+
+### Phase 1 — Agent 每日总结 ✅
+- [x] 重构 daily_review/daily_review.py：调 sync 入库 → jieba+LIKE 检索历史候选 → 输出 JSON + 引用 prompts/daily_summary.md → 无新内容静默
+- [ ] 验证 cron 触发链路（需真实环境验证）
+- 兑现 Aha：跨书回声
+
+### Phase 2 — Agent 读后总结 ✅
+- [x] 新建 book_summary/book_summary.py：检测 finishTime → 拉全书划线+批注+bestbookmarks → 输出 JSON + 引用 prompts/book_summary.md
+- [x] 触发机制：每日检测 finishTime（get_newly_finished_books），save_summary 防重复触发
+- 兑现 Aha：读后洞见 + 盲点发现
+
+### Phase 3 — 数据管道 + 文档 ✅
+- [ ] notes_export.py 收敛为 sync.py 调用方（留待后续，优先级低）
+- [x] 更新 SKILL.md：v2.0.0，三项能力 + 知识库底座说明，完整文件结构
+- [x] 更新版本号 → 2.0.0
+
+### Phase 4 — Web 端（B 类用户，独立线）
+- [ ] 后端：SQLite 暴露为 API（本地原型）；上线迁后端 DB
+- [ ] 后端：embedding + 向量检索
+- [ ] 前端第一层：阅读全貌可视化（书架状态/参与深度/节奏曲线）
+- [ ] 前端第二层：知识结构可视化（概念图谱/跨书聚合/兴趣迁移）— 兑现 Aha：知识轨迹
+- [ ] 前端第三层：沉淀与输出（主题综述/交互式内容生成）
+
+### Phase 5 — 长期优化
+- [ ] concepts 标签提取落地（embedding 或 agent 回写）
+- [ ] 阅读记忆注入 — 兑现 Aha：知识被用上

@@ -1,161 +1,162 @@
 #!/usr/bin/env python3
 """
-微信读书每日阅读回顾
-输出今日阅读数据，供 agent 总结并推送
+微信读书每日阅读回顾 v2
+触发：cron weread-daily-review 每日 23:00 Asia/Shanghai
+输出：[AGENT_DAILY_DATA] JSON → agent LLM 使用 prompts/daily_summary.md 合成 → 推送
+无新内容时静默退出
 """
 
-import json, subprocess, os
+import json
+import sys
+import time
+from collections import Counter
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
-STATE_FILE = os.path.expanduser("~/.openclaw/workspace/data/reading_daily_state.json")
+_LIB = Path(__file__).parent.parent / "lib"
+sys.path.insert(0, str(_LIB))
+
+from sync import sync_all
+from knowledge_base import (
+    get_highlights_since,
+    get_reviews_since,
+    search_content,
+)
+
 CHINA_TZ = timezone(timedelta(hours=8))
 
-SKILL_VERSION = "1.0.3"
+_STOPWORDS = {
+    "的", "了", "是", "在", "我", "有", "和", "就", "不", "人", "都", "一",
+    "上", "也", "很", "到", "说", "要", "去", "你", "会", "着", "没有",
+    "看", "好", "自己", "这", "那", "里", "不是", "他", "她", "它",
+    "我们", "他们", "这个", "那个", "什么", "如果", "但是", "因为", "所以",
+    "可以", "已经", "这样", "这种", "一种", "通过", "一些", "这些", "只是",
+    "而且", "并且", "或者", "然后", "其实", "对于", "关于", "包括", "以及",
+    "时候", "方式", "问题", "事情", "时间", "一个", "一样",
+}
 
-def apiRequest(apiName, payload=None):
-    with open(os.path.expanduser("~/.openclaw/openclaw.json")) as f:
-        d = json.load(f)
-    api_key = d["skills"]["entries"]["weread-skills"]["env"]["WEREAD_API_KEY"]
-    payload = payload or {}
-    payload["api_name"] = apiName
-    payload["skill_version"] = SKILL_VERSION
-    body = json.dumps(payload)
-    result = subprocess.run(
-        ["curl", "-s", "-X", "POST",
-         "https://i.weread.qq.com/api/agent/gateway",
-         "-H", f"Authorization: Bearer {api_key}",
-         "-H", "Content-Type: application/json",
-         "-d", body],
-        capture_output=True, text=True
-    )
-    try:
-        return json.loads(result.stdout)
-    except:
-        return {"errcode": -1, "errmsg": result.stdout[:200]}
 
-def utc8_now():
-    return datetime.now(CHINA_TZ)
-
-def utc8_day_range():
-    now = utc8_now()
+def utc8_today_start() -> int:
+    now = datetime.now(CHINA_TZ)
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return start.timestamp(), now.timestamp()
+    return int(start.timestamp())
 
-def fmt_time(ts):
-    if not ts:
-        return "无记录"
-    t = datetime.fromtimestamp(ts, tz=CHINA_TZ)
-    return t.strftime("%H:%M")
 
-def load_state():
+def extract_keywords(texts, top_n=8):
     try:
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_state(state):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, ensure_ascii=False)
-
-def get_today_books():
-    start_ts, _ = utc8_day_range()
-    shelf = apiRequest("/shelf/sync")
-    if shelf.get("errcode"):
+        import jieba
+        words = []
+        for t in texts:
+            words.extend(jieba.cut(t))
+        meaningful = [w for w in words if len(w) >= 2 and w not in _STOPWORDS]
+        return [w for w, _ in Counter(meaningful).most_common(top_n)]
+    except ImportError:
         return []
-    books = shelf.get("books", [])
-    return [(b, b.get("readUpdateTime", 0)) for b in books if b.get("readUpdateTime", 0) >= start_ts]
 
-def get_progress(book_id):
-    return apiRequest("/book/getprogress", {"bookId": book_id})
 
-def get_today_marks(book_id):
-    start_ts, _ = utc8_day_range()
-    result = apiRequest("/book/bookmarklist", {"bookId": book_id})
-    if result.get("errcode"):
+def find_echoes(today_book_ids, keywords, today_start_ts, max_results=3):
+    """jieba keywords → SQL LIKE → cross-book historical matches."""
+    if not keywords:
         return []
-    return [m for m in result.get("updated", []) if m.get("createTime", 0) >= start_ts]
+
+    seen_keys = set()
+    results = []
+    now_ts = int(time.time())
+
+    for kw in keywords:
+        if len(results) >= max_results:
+            break
+        candidates = search_content(
+            keyword=kw,
+            exclude_book_ids=list(today_book_ids) if today_book_ids else None,
+            before_ts=today_start_ts,
+            limit=2,
+        )
+        for c in candidates:
+            dedup_key = (c["book_title"], c["content"][:50])
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+            days_ago = max(0, (now_ts - (c.get("create_time") or now_ts)) // 86400)
+            c["days_ago"] = days_ago
+            results.append(c)
+            if len(results) >= max_results:
+                break
+
+    return results
+
 
 def main():
-    now = utc8_now()
-    date_str = now.strftime("%Y-%m-%d")
+    today_start = utc8_today_start()
+    today_str = datetime.fromtimestamp(today_start, tz=CHINA_TZ).strftime("%Y-%m-%d")
 
-    print(f"📚 微信读书今日回顾 | {date_str}")
-    print("=" * 40)
+    sync_all(verbose=False)
 
-    today_books = get_today_books()
-    state = load_state()
+    new_highlights = get_highlights_since(today_start)
+    new_reviews = get_reviews_since(today_start)
 
-    if not today_books:
-        print("今日暂无阅读记录 📭")
-        print("=" * 40)
-        save_state({})
+    if not new_highlights and not new_reviews:
         return
 
-    print(f"今日阅读 {len(today_books)} 本\n")
+    books_active = {}
+    for h in new_highlights:
+        books_active[h["book_id"]] = {
+            "title":  h.get("book_title", ""),
+            "author": h.get("book_author", ""),
+        }
+    for r in new_reviews:
+        books_active[r["book_id"]] = {
+            "title":  r.get("book_title", ""),
+            "author": r.get("book_author", ""),
+        }
 
-    all_data = []
+    today_book_ids = set(books_active.keys())
 
-    for book, read_time in sorted(today_books, key=lambda x: x[1], reverse=True):
-        book_id = book.get("bookId")
-        title = book.get("title", "?")
-        author = book.get("author", "?")
-        finish = book.get("finishReading", 0)
+    all_text = [h["content"] for h in new_highlights] + [r["content"] for r in new_reviews]
+    keywords = extract_keywords(all_text)
+    echoes = find_echoes(today_book_ids, keywords, today_start)
 
-        today_marks = get_today_marks(book_id)
-        mark_count = len(today_marks)
+    payload = {
+        "date": today_str,
+        "books_active": list(books_active.values()),
+        "new_highlights": [
+            {
+                "book_title":    h.get("book_title", ""),
+                "author":        h.get("book_author", ""),
+                "content":       h["content"],
+                "chapter_title": h.get("chapter_title", ""),
+            }
+            for h in new_highlights
+        ],
+        "new_reviews": [
+            {
+                "book_title": r.get("book_title", ""),
+                "author":     r.get("book_author", ""),
+                "content":    r["content"],
+            }
+            for r in new_reviews
+        ],
+        "cross_book_echoes": [
+            {
+                "book_title":  e["book_title"],
+                "author":      e.get("author", ""),
+                "content":     e["content"],
+                "matched_kw":  e["matched_kw"],
+                "days_ago":    e["days_ago"],
+                "source_type": e["source_type"],
+            }
+            for e in echoes
+        ],
+        "prompt_ref": "prompts/daily_summary.md",
+    }
 
-        current_pct = 0
-        prev_pct = state.get(book_id, {}).get("progress", 0)
-        progress_info = get_progress(book_id)
-        if progress_info.get("errcode") == 0:
-            current_pct = progress_info.get("book", {}).get("progress", 0)
+    print(f"微信读书每日回顾 | {today_str}")
+    print(f"新增 {len(new_highlights)} 条划线 / {len(new_reviews)} 条批注"
+          + (f" / {len(echoes)} 条跨书呼应" if echoes else ""))
+    print()
+    print("[AGENT_DAILY_DATA]")
+    print(json.dumps(payload, ensure_ascii=False))
 
-        if finish:
-            status = "✅ 已读完"
-        else:
-            delta = current_pct - prev_pct
-            if delta > 0:
-                status = f"📖 {current_pct}% (+{delta}%)"
-            elif current_pct > 0:
-                status = f"📖 {current_pct}%"
-            else:
-                status = "📖 在读"
-
-        mark_texts = [m.get("markText", "").strip() for m in today_marks if m.get("markText", "").strip()]
-
-        print(f"{status} {title}")
-        print(f"  作者: {author}")
-        if read_time:
-            print(f"  阅读时间: {fmt_time(read_time)}")
-        if mark_count > 0:
-            print(f"  今日新增划线 {mark_count} 条:")
-            for i, t in enumerate(mark_texts):
-                print(f"    [{i+1}] {t}")
-        else:
-            print(f"  今日无新增划线")
-        print()
-
-        all_data.append({
-            "title": title, "author": author, "status": status,
-            "read_time": fmt_time(read_time), "mark_count": mark_count,
-            "mark_texts": mark_texts, "current_pct": current_pct,
-        })
-
-    print("=" * 40)
-
-    # 保存进度状态
-    new_state = {}
-    for book, _ in today_books:
-        book_id = book.get("bookId")
-        prog = get_progress(book_id)
-        p = prog.get("book", {}).get("progress", 0) if prog.get("errcode") == 0 else 0
-        new_state[book_id] = {"progress": p}
-    save_state(new_state)
-
-    print("\n[AGENT_SUMMARY_DATA]")
-    print(json.dumps(all_data, ensure_ascii=False))
 
 if __name__ == "__main__":
     main()

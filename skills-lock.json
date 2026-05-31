@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "weread-skills": {
+      "source": "Tencent/WeChatReading",
+      "sourceType": "github",
+      "skillPath": "skills/SKILL.md",
+      "computedHash": "f15af38289cd5c0aaa71b5396219a8a6093be6add81a620cecb6c8f869341794"
+    }
+  }
+}

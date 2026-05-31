@@ -1,151 +1,131 @@
 ---
 name: wechat-reading-custom
-description: 微信读书扩展技能 — 每日阅读回顾 + 书籍概览 + 读完统计 + 笔记导出 + 主题回顾 + 阅读可视化
-version: 1.1.0
+description: 微信读书扩展技能 — 每日阅读回顾（跨书呼应）+ 读后总结 + 笔记导出 + 语义知识库
+version: 2.0.0
 ---
 
 # 微信读书扩展技能
 
-基于微信读书官方 weread-skills 接口（本 skill 目录下 `~/.agents/skills/weread-skills/`），实现多个扩展能力。
+基于微信读书官方 weread-skills 接口，实现三项核心能力，并维护一个本地 SQLite 语义知识库供增量检索。
 
 **依赖接口：**
-- `/shelf/sync` — 书架
-- `/book/getprogress` — 进度
-- `/book/bookmarklist` — 划线内容
-- `/book/bestbookmarks` — 热门划线
-- `/book/chapterinfo` — 章节结构
-- `/book/info` — 书籍信息
-- `/user/notebooks` — 有笔记的书（分页遍历）
-- `/readdata/detail` — 阅读统计（weekly/monthly/annually/overall）
-- `/store/search` — 书城搜索
+- `/shelf/sync` — 书架（含完读状态）
+- `/book/bookmarklist` — 个人划线
+- `/review/list/mine` — 个人批注/想法
+- `/book/bestbookmarks` — 大众热门划线
+- `/book/similar` — 相似书推荐
+- `/user/notebooks` — 有笔记的书（笔记导出用）
 
 ---
 
 ## 能力一：每日阅读回顾
 
-**功能**：UTC+8 当天读了什么书、进度变化、新增划线内容
+**功能**：当天新增划线 + 批注，附跨书呼应（jieba 分词 → 历史 LIKE 检索）
 
 **脚本**：`daily_review/daily_review.py`
 
-**触发**：cron `weread-daily-review` 每日 23:00 Asia/Shanghai → agent 总结 → 推 QQ
+**触发**：cron `weread-daily-review` 每日 23:00 Asia/Shanghai
 
 **独立测试**：
 ```bash
 python3 ~/.openclaw/workspace/skills/wechat-reading-custom/daily_review/daily_review.py
 ```
 
-**输出**：
-- 今日在读书籍列表
-- 每本今日新增划线内容
-- 进度增量（今日 vs 昨日）
+**输出**：无新内容时静默；有内容时输出 `[AGENT_DAILY_DATA]` JSON，agent LLM 使用 `prompts/daily_summary.md` 合成。
 
----
-
-## 能力二：书籍概览 book_overview
-
-**功能**：书名 → 书籍信息 + 章节结构 + 各章热门划线（agent 基于输出总结）
-
-**脚本**：`qa/weread_qa.py`
-
-**使用**：
-```bash
-# 直接运行
-python3 ~/.openclaw/workspace/skills/wechat-reading-custom/qa/weread_qa.py "书名" [bookId]
-
-# 通过 agent 调用（推荐）
-# agent 读取脚本输出的 [AGENT_QA_JSON] 做总结
+**JSON 结构**：
+```json
+{
+  "date": "2026-05-31",
+  "books_active": [{"title": "...", "author": "..."}],
+  "new_highlights": [{"book_title": "...", "content": "...", "chapter_title": "..."}],
+  "new_reviews":    [{"book_title": "...", "content": "..."}],
+  "cross_book_echoes": [{"book_title": "...", "content": "...", "matched_kw": "...", "days_ago": 42}],
+  "prompt_ref": "prompts/daily_summary.md"
+}
 ```
 
-**注意**：`/store/search` 对某些书返回 0 条结果，bookId 优先从书架获取
-
 ---
 
-## 能力三：读完统计
+## 能力二：读后总结
 
-**功能**：今年 vs 历史读完本数统计、书单
+**功能**：检测新完读书籍（`finishTime` 出现），生成"这本书给了我什么"
 
-**脚本**：`completion_stats/completion_stats.py`
+**脚本**：`book_summary/book_summary.py`
 
-**使用**：
+**触发**：每日与 daily_review 同时运行；`get_newly_finished_books()` 检测未总结的完读书
+
+**独立测试**：
 ```bash
-python3 ~/.openclaw/workspace/skills/wechat-reading-custom/completion_stats/completion_stats.py
+python3 ~/.openclaw/workspace/skills/wechat-reading-custom/book_summary/book_summary.py
 ```
 
-**接口依赖**：`/shelf/sync`（筛 finishReading==1） + `/readdata/detail`
+**输出**：无新完读书时静默；有则输出 `[AGENT_BOOK_SUMMARY_DATA]` JSON，agent LLM 使用 `prompts/book_summary.md` 合成。
+
+**JSON 结构**：
+```json
+{
+  "book": {"title": "...", "author": "...", "category": "...", "finish_date": "..."},
+  "my_highlights": [{"content": "...", "chapter_title": "..."}],
+  "my_reviews":    [{"content": "..."}],
+  "popular_highlights":   [{"content": "...", "total_count": 3200}],
+  "popular_not_in_mine":  [{"content": "...", "total_count": 2100}],
+  "similar_books": [{"title": "...", "author": "..."}],
+  "prompt_ref": "prompts/book_summary.md"
+}
+```
 
 ---
 
-## 能力四：笔记导出
+## 能力三：笔记导出
 
-**功能**：将个人划线笔记导出，支持关键词筛选；数据保存到 JSON 文件
+**功能**：导出个人划线，支持关键词筛选
 
 **脚本**：`notes_export/notes_export.py`
 
 **使用**：
 ```bash
-# 导出全部笔记
 python3 ~/.openclaw/workspace/skills/wechat-reading-custom/notes_export/notes_export.py
-
-# 关键词筛选（如：自由、消费、哲学）
 python3 ~/.openclaw/workspace/skills/wechat-reading-custom/notes_export/notes_export.py "关键词"
 ```
-
-**接口依赖**：`/user/notebooks`（分页遍历） + `/book/bookmarklist`（逐本拉划线）
-
-**注意**：有笔记的书共 43 本，共 9822 条划线，每次运行约需 50 次 API 调用，间隔 0.3s，总耗时约 15-20 秒
 
 **输出文件**：`~/.openclaw/workspace/data/weread_notes_export.json`
 
 ---
 
-## 能力五：主题回顾（增强版）
+## Agent 执行模型
 
-**功能**：跨书按关键词聚合所有划线；不传关键词时自动聚类所有划线，提炼主题方向
+脚本本身**不调用 LLM**。完整链路：
 
-**脚本**：`theme_review/theme_review.py`
-
-**使用**：
-```bash
-# 自动聚类模式（无关键词）— 从所有划线中提炼主题方向
-python3 ~/.openclaw/workspace/skills/wechat-reading-custom/theme_review/theme_review.py
-
-# 关键词搜索模式
-python3 ~/.openclaw/workspace/skills/wechat-reading-custom/theme_review/theme_review.py "自由"
+```
+cron 触发
+  → Python 脚本（拉数据 + 入库 + 检索）
+  → stdout 输出 [AGENT_*_DATA] JSON
+  → Agent 读取 JSON
+  → Agent LLM 加载对应 prompts/*.md 作为合成指令
+  → 输出总结推送给用户
 ```
 
-**自动聚类流程**：
-1. 调用 `/user/notebooks` 获取所有有笔记的书（分页遍历）
-2. 对每本书调用 `/book/bookmarklist` 获取所有划线
-3. jieba 分词 + TF-IDF 向量化 + KMeans 聚类（sklearn）
-4. 输出主题方向列表，每主题含关键词 + 代表性划线样本
-5. 输出 JSON 结构供 agent 二次总结
-
-**接口依赖**：`/user/notebooks`（分页遍历） + `/book/bookmarklist`（逐本查划线）
-
-**输出**：
-- 主要主题方向列表（每方向含 top 关键词 + 3-5 条代表性划线）
-- `[AGENT_THEME_JSON]` 块：JSON 格式供 agent 总结
-
-**依赖**：Python `jieba`、`sklearn`（已预装）
+`prompt_ref` 字段告诉 Agent 使用哪个 prompt 文件合成。Agent 的 LLM 能力即为 openclaw 自身，无需额外 API Key。
 
 ---
 
-## 能力六：阅读统计可视化（增强版）
+## 底座：本地语义知识库
 
-**功能**：周/月/年/历史阅读时长、偏好分类、读书排行，生成 HTML 图表；含季度趋势对比（Q1 vs Q2 百分比变化）
+**位置**：`data/knowledge.db`（SQLite，不提交 git）
 
-**脚本**：`reading_stats_viz/reading_stats_viz.py`
+**表结构**：`books` / `highlights` / `reviews` / `concepts` / `summaries` / `sync_state`
 
-**使用**：
+**同步模块**：`lib/sync.py`，增量拉取，每本书间隔 0.3s 限速
+
 ```bash
-python3 ~/.openclaw/workspace/skills/wechat-reading-custom/reading_stats_viz/reading_stats_viz.py
+python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py
+python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force
 ```
 
-**输出**：`~/.openclaw/workspace/data/weread_reading_stats.html`（浏览器打开查看）
-
-**季度对比**：在「今年各季度阅读时长」卡片中显示 Q1 vs Q2 变化百分比（绿色↑/红色↓）
-
-**接口依赖**：`/readdata/detail`（mode: weekly/monthly/annually/overall）
+**环境变量**：
+- `WEREAD_API_KEY` — API Key（优先级：env > .env > openclaw.json）
+- `WEREAD_KB_PATH` — 自定义 DB 路径（默认 `data/knowledge.db`）
 
 ---
 
@@ -154,35 +134,42 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/reading_stats_viz/rea
 ```
 wechat-reading-custom/
 ├── SKILL.md
+├── ROADMAP.md
+├── lib/
+│   ├── knowledge_base.py    # SQLite schema + CRUD + keyword search
+│   └── sync.py              # 增量数据同步层
 ├── daily_review/
-│   └── daily_review.py      # 每日阅读回顾
-├── qa/
-│   └── weread_qa.py         # 书籍概览 book_overview
-├── completion_stats/
-│   └── completion_stats.py  # 读完统计
+│   └── daily_review.py      # 每日阅读回顾（跨书呼应）
+├── book_summary/
+│   └── book_summary.py      # 读后总结
 ├── notes_export/
 │   └── notes_export.py      # 笔记导出
-├── theme_review/
-│   └── theme_review.py      # 主题回顾（增强：自动聚类）
-└── reading_stats_viz/
-    └── reading_stats_viz.py  # 阅读可视化（增强：Q1 vs Q2 对比）
+├── prompts/
+│   ├── daily_summary.md     # 每日总结 prompt（给 agent LLM）
+│   ├── book_summary.md      # 读后总结 prompt（给 agent LLM）
+│   └── samples.md           # 用户样本（prompt 校准用）
+└── data/                    # 本地 SQLite（gitignored）
+    └── knowledge.db
 ```
 
 ---
 
 ## 依赖
 
-- Python 3.10+
+- Python 3.9+
 - `curl` 命令行工具
-- `jieba`、`sklearn`（主题聚类用，已预装）
-- `~/.openclaw/openclaw.json` 中已配置 `skills.entries.weread-skills.env.WEREAD_API_KEY`
-- 时区：统一使用 `Asia/Shanghai` (UTC+8)
+- `jieba`（跨书呼应分词，已预装）
+- `~/.openclaw/openclaw.json` 中已配置 `WEREAD_API_KEY`，或设置环境变量
 
 ---
 
 ## 更新日志
 
-- 2026-05-24 v1.1.0：
-  - **theme_review**：新增无关键词自动聚类模式，jieba + TF-IDF + KMeans 聚类提炼主题方向
-  - **reading_stats_viz**：新增 Q1 vs Q2 季度对比百分比显示
-- 2026-05-24 v1.0.0：初始版本，支持每日回顾 + 书籍概览 + 读完统计 + 笔记导出 + 主题回顾 + 阅读可视化
+- 2026-05-31 v2.0.0：
+  - 新增本地 SQLite 语义知识库（`lib/knowledge_base.py` + `lib/sync.py`）
+  - **daily_review** 重构：增量入库 + jieba+LIKE 跨书呼应，输出结构化 JSON
+  - **book_summary** 新增：检测完读书籍，对比大众热门划线，附延伸推荐
+  - 删除冗余脚本：qa / completion_stats / theme_review / reading_stats_viz
+  - 新增 prompts/ 目录：daily_summary.md + book_summary.md（stop-slop 反 AI 风格）
+- 2026-05-24 v1.1.0：theme_review 自动聚类 + reading_stats_viz 季度对比
+- 2026-05-24 v1.0.0：初始版本
