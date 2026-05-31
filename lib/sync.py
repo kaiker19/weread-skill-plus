@@ -39,34 +39,24 @@ SKILL_VERSION = "1.0.3"
 # ── API helpers ────────────────────────────────────────────────────────────
 
 def _load_api_key():
-    # 1. 本地 .env 文件（本地开发优先）
-    env_path = Path(__file__).parent.parent / ".env"
+    root = Path(__file__).parent.parent
+    # 1. data/api_key 文件（推荐，最稳定）
+    key_file = root / "data" / "api_key"
+    if key_file.exists():
+        val = key_file.read_text().strip()
+        if val:
+            return val
+    # 2. .env 文件（兼容本地开发习惯）
+    env_path = root / ".env"
     if env_path.exists():
         for line in env_path.read_text().splitlines():
             if line.strip().startswith("WEREAD_API_KEY="):
                 val = line.split("=", 1)[1].strip()
                 if val:
                     return val
-
-    # 2. openclaw.json（agent 运行时权威来源，完整 key）
-    config = Path.home() / ".openclaw" / "openclaw.json"
-    if config.exists():
-        try:
-            d = json.load(open(config))
-            val = d["skills"]["entries"]["weread-skills"]["env"]["WEREAD_API_KEY"]
-            if val:
-                return val
-        except (KeyError, json.JSONDecodeError):
-            pass
-
-    # 3. 环境变量（最后兜底，需验证未被 openclaw 脱敏截断）
-    val = os.environ.get("WEREAD_API_KEY", "")
-    if val and "*" not in val and len(val) > 20:
-        return val
-
     raise RuntimeError(
         "WEREAD_API_KEY not found. "
-        "Set it in ~/.openclaw/openclaw.json or a .env file."
+        "Please create data/api_key and paste your key inside."
     )
 
 

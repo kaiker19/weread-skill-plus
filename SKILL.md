@@ -140,8 +140,15 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force
 
 ## 首次安装
 
-1. 前往 [https://weread.qq.com/r/weread-skills](https://weread.qq.com/r/weread-skills) 获取 `WEREAD_API_KEY` 并完成 openclaw 配置
-2. 全量同步阅读数据到本地知识库：
+1. 前往 [https://weread.qq.com/r/weread-skills](https://weread.qq.com/r/weread-skills) 获取 `WEREAD_API_KEY`
+2. 将 key 写入 skill 目录下的 `data/api_key` 文件（一行，仅 key 值）：
+
+```bash
+mkdir -p ~/.openclaw/workspace/skills/wechat-reading-custom/data
+echo "your_key_here" > ~/.openclaw/workspace/skills/wechat-reading-custom/data/api_key
+```
+
+3. 全量同步阅读数据到本地知识库：
 
 ```bash
 python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force

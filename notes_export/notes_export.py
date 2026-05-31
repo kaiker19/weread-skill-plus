@@ -29,29 +29,22 @@ def api(key, name, payload=None):
         return {"errcode": -1, "errmsg": r.stdout[:200]}
 
 def get_key():
-    # 1. 本地 .env 文件
-    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # 1. data/api_key 文件（推荐，最稳定）
+    key_file = os.path.join(root, "data", "api_key")
+    if os.path.exists(key_file):
+        val = open(key_file).read().strip()
+        if val:
+            return val
+    # 2. .env 文件（兼容本地开发习惯）
+    env_path = os.path.join(root, ".env")
     if os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                if line.strip().startswith("WEREAD_API_KEY="):
-                    val = line.split("=", 1)[1].strip()
-                    if val:
-                        return val
-    # 2. openclaw.json（agent 运行时权威来源）
-    config = os.path.expanduser("~/.openclaw/openclaw.json")
-    if os.path.exists(config):
-        try:
-            val = json.load(open(config))["skills"]["entries"]["weread-skills"]["env"]["WEREAD_API_KEY"]
-            if val:
-                return val
-        except (KeyError, json.JSONDecodeError):
-            pass
-    # 3. 环境变量兜底（验证未被 openclaw 脱敏截断）
-    val = os.environ.get("WEREAD_API_KEY", "")
-    if val and "*" not in val and len(val) > 20:
-        return val
-    raise RuntimeError("WEREAD_API_KEY not found. Set it in ~/.openclaw/openclaw.json or .env")
+        for line in open(env_path):
+            if line.strip().startswith("WEREAD_API_KEY="):
+                val = line.split("=", 1)[1].strip()
+                if val:
+                    return val
+    raise RuntimeError("WEREAD_API_KEY not found. Please create data/api_key and paste your key inside.")
 
 def fmtTime(ts):
     if not ts:
