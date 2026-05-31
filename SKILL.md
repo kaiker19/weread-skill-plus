@@ -129,47 +129,9 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force
 
 ---
 
-## 文件结构
-
-```
-wechat-reading-custom/
-├── SKILL.md
-├── ROADMAP.md
-├── lib/
-│   ├── knowledge_base.py    # SQLite schema + CRUD + keyword search
-│   └── sync.py              # 增量数据同步层
-├── daily_review/
-│   └── daily_review.py      # 每日阅读回顾（跨书呼应）
-├── book_summary/
-│   └── book_summary.py      # 读后总结
-├── notes_export/
-│   └── notes_export.py      # 笔记导出
-├── prompts/
-│   ├── daily_summary.md     # 每日总结 prompt（给 agent LLM）
-│   ├── book_summary.md      # 读后总结 prompt（给 agent LLM）
-│   └── samples.md           # 用户样本（prompt 校准用）
-└── data/                    # 本地 SQLite（gitignored）
-    └── knowledge.db
-```
-
----
-
 ## 依赖
 
 - Python 3.9+
 - `curl` 命令行工具
 - `jieba`（跨书呼应分词，已预装）
-- `~/.openclaw/openclaw.json` 中已配置 `WEREAD_API_KEY`，或设置环境变量
-
----
-
-## 更新日志
-
-- 2026-05-31 v2.0.0：
-  - 新增本地 SQLite 语义知识库（`lib/knowledge_base.py` + `lib/sync.py`）
-  - **daily_review** 重构：增量入库 + jieba+LIKE 跨书呼应，输出结构化 JSON
-  - **book_summary** 新增：检测完读书籍，对比大众热门划线，附延伸推荐
-  - 删除冗余脚本：qa / completion_stats / theme_review / reading_stats_viz
-  - 新增 prompts/ 目录：daily_summary.md + book_summary.md（stop-slop 反 AI 风格）
-- 2026-05-24 v1.1.0：theme_review 自动聚类 + reading_stats_viz 季度对比
-- 2026-05-24 v1.0.0：初始版本
+- `WEREAD_API_KEY` 已在 openclaw 中配置
