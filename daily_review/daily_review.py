@@ -54,36 +54,48 @@ def extract_keywords(texts, top_n=8):
         return []
 
 
-def find_echoes(today_book_ids, keywords, today_start_ts, max_results=3):
-    """jieba keywords → SQL LIKE → cross-book historical matches."""
+def find_echoes(today_book_ids, keywords, today_start_ts, max_results=6):
+    """jieba keywords → SQL LIKE → cross-book historical matches.
+    遍历全部关键词，每本书最多贡献 1 条（取命中关键词最多的），最终返回 max_results 条。
+    """
     if not keywords:
         return []
 
-    seen_keys = set()
-    results = []
+    seen_content_keys = set()
+    all_candidates = []
     now_ts = int(time.time())
 
     for kw in keywords:
-        if len(results) >= max_results:
-            break
         candidates = search_content(
             keyword=kw,
             exclude_book_ids=list(today_book_ids) if today_book_ids else None,
             before_ts=today_start_ts,
-            limit=2,
+            limit=3,
         )
         for c in candidates:
             dedup_key = (c["book_title"], c["content"][:50])
-            if dedup_key in seen_keys:
+            if dedup_key in seen_content_keys:
+                for item in all_candidates:
+                    if (item["book_title"], item["content"][:50]) == dedup_key:
+                        item["_score"] += 1
+                        break
                 continue
-            seen_keys.add(dedup_key)
-            days_ago = max(0, (now_ts - (c.get("create_time") or now_ts)) // 86400)
-            c["days_ago"] = days_ago
-            results.append(c)
-            if len(results) >= max_results:
-                break
+            seen_content_keys.add(dedup_key)
+            c["days_ago"] = max(0, (now_ts - (c.get("create_time") or now_ts)) // 86400)
+            c["_score"] = 1
+            all_candidates.append(c)
 
-    return results
+    # 每本书只保留得分最高的 1 条
+    book_best = {}
+    for c in all_candidates:
+        title = c["book_title"]
+        if title not in book_best or c["_score"] > book_best[title]["_score"]:
+            book_best[title] = c
+
+    # 按命中关键词数降序，取 top max_results
+    sorted_candidates = sorted(book_best.values(), key=lambda x: -x["_score"])
+    return [{k: v for k, v in c.items() if k != "_score"}
+            for c in sorted_candidates[:max_results]]
 
 
 def main():
