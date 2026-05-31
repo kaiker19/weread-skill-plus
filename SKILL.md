@@ -123,8 +123,9 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py
 python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force
 ```
 
+**API Key 读取优先级**：`data/api_key` 文件 > `.env` 文件
+
 **环境变量**：
-- `WEREAD_API_KEY` — API Key（优先级：env > .env > openclaw.json）
 - `WEREAD_KB_PATH` — 自定义 DB 路径（默认 `data/knowledge.db`）
 
 ---
@@ -134,7 +135,6 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force
 - Python 3.9+
 - `curl` 命令行工具
 - `jieba`（跨书呼应分词，已预装）
-- `WEREAD_API_KEY` 已在 openclaw 中配置
 
 ---
 
@@ -153,3 +153,7 @@ echo "your_key_here" > ~/.openclaw/workspace/skills/wechat-reading-custom/data/a
 ```bash
 python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force
 ```
+
+> **注意**：首次全量同步按书架规模约需 3-10 分钟（每本书间隔 0.3s 限速）。完成后每日增量同步仅需数秒。
+
+> **cold start 保护**：`book_summary` 首次运行仅处理最近 30 天内完读的书籍，避免历史积压书单一次性全部触发。
