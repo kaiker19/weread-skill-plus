@@ -39,17 +39,35 @@ SKILL_VERSION = "1.0.3"
 # ── API helpers ────────────────────────────────────────────────────────────
 
 def _load_api_key():
-    if os.environ.get("WEREAD_API_KEY"):
-        return os.environ["WEREAD_API_KEY"]
+    # 1. 本地 .env 文件（本地开发优先）
     env_path = Path(__file__).parent.parent / ".env"
     if env_path.exists():
         for line in env_path.read_text().splitlines():
             if line.strip().startswith("WEREAD_API_KEY="):
-                return line.split("=", 1)[1].strip()
+                val = line.split("=", 1)[1].strip()
+                if val:
+                    return val
+
+    # 2. openclaw.json（agent 运行时权威来源，完整 key）
     config = Path.home() / ".openclaw" / "openclaw.json"
-    with open(config) as f:
-        d = json.load(f)
-    return d["skills"]["entries"]["weread-skills"]["env"]["WEREAD_API_KEY"]
+    if config.exists():
+        try:
+            d = json.load(open(config))
+            val = d["skills"]["entries"]["weread-skills"]["env"]["WEREAD_API_KEY"]
+            if val:
+                return val
+        except (KeyError, json.JSONDecodeError):
+            pass
+
+    # 3. 环境变量（最后兜底，需验证未被 openclaw 脱敏截断）
+    val = os.environ.get("WEREAD_API_KEY", "")
+    if val and "*" not in val and len(val) > 20:
+        return val
+
+    raise RuntimeError(
+        "WEREAD_API_KEY not found. "
+        "Set it in ~/.openclaw/openclaw.json or a .env file."
+    )
 
 
 def _api(api_name, payload=None):
