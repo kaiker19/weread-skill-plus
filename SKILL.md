@@ -135,3 +135,14 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force
 - `curl` 命令行工具
 - `jieba`（跨书呼应分词，已预装）
 - `WEREAD_API_KEY` 已在 openclaw 中配置
+
+---
+
+## 首次安装
+
+1. 前往 [https://weread.qq.com/r/weread-skills](https://weread.qq.com/r/weread-skills) 获取 `WEREAD_API_KEY` 并完成 openclaw 配置
+2. 全量同步阅读数据到本地知识库：
+
+```bash
+python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force
+```
