@@ -57,6 +57,10 @@ def extract_keywords(texts, top_n=8):
 def find_echoes(today_book_ids, keywords, today_start_ts, max_results=6):
     """jieba keywords → SQL LIKE → cross-book historical matches.
     遍历全部关键词，每本书最多贡献 1 条（取命中关键词最多的），最终返回 max_results 条。
+
+    这里返回的是「候选池」，不是最终输出。关键词重合计数是粗排，
+    保持宽松（默认 6）以保证召回；真正的精选交给 agent —— prompt 会从候选里
+    挑 2-3 条写出真实连接、丢弃假呼应。不要在这一层提前砍候选。
     """
     if not keywords:
         return []
