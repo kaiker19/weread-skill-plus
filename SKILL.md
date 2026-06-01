@@ -167,7 +167,8 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force
 当用户想更新本技能，或网关回包出现 `upgrade_info` 字段（提示有新版本）时，引导用户执行：
 
 ```bash
-npx skills update weread-skill-plus   # 只更新本技能（别名 upgrade）
+npx skills update                         # 更新全部已装技能（别名 upgrade）
+npx skills update wechat-reading-custom   # 只更新本技能（按 SKILL.md 的 name，非仓库名 weread-skill-plus）
 ```
 
 更新只替换技能代码，不动 `data/`（知识库与 API Key 都在此，不受影响）。更新后无需重新全量同步。

@@ -46,8 +46,8 @@ python3 lib/sync.py --force
 ### 更新
 
 ```bash
-npx skills update weread-skill-plus   # 只更新本技能
-npx skills update                     # 更新全部技能（别名 upgrade）
+npx skills update                         # 更新全部已装技能（别名 upgrade）
+npx skills update wechat-reading-custom   # 只更新本技能（按技能名，非仓库名）
 ```
 
 更新不会动 `data/`（你的知识库和 API Key 都在这里，不受影响）。
