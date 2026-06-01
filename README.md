@@ -23,7 +23,7 @@
 ### 通过 npx（推荐）
 
 ```bash
-npx skills install kaiker19/weread-skill-plus
+npx skills add kaiker19/weread-skill-plus
 ```
 
 ### 配置 API Key
@@ -42,6 +42,15 @@ python3 lib/sync.py --force
 ```
 
 > 首次同步按书架规模约需 3-10 分钟（每本书间隔 0.3s 限速）。完成后每日增量同步仅需数秒。
+
+### 更新
+
+```bash
+npx skills update weread-skill-plus   # 只更新本技能
+npx skills update                     # 更新全部技能（别名 upgrade）
+```
+
+更新不会动 `data/`（你的知识库和 API Key 都在这里，不受影响）。
 
 ---
 

@@ -159,3 +159,15 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force
 > **注意**：首次全量同步按书架规模约需 3-10 分钟（每本书间隔 0.3s 限速）。完成后每日增量同步仅需数秒。
 
 > **cold start 保护**：`book_summary` 首次运行仅处理最近 30 天内完读的书籍，避免历史积压书单一次性全部触发。
+
+---
+
+## 更新
+
+当用户想更新本技能，或网关回包出现 `upgrade_info` 字段（提示有新版本）时，引导用户执行：
+
+```bash
+npx skills update weread-skill-plus   # 只更新本技能（别名 upgrade）
+```
+
+更新只替换技能代码，不动 `data/`（知识库与 API Key 都在此，不受影响）。更新后无需重新全量同步。
