@@ -75,7 +75,7 @@ cron 触发
 
 - Python 3.9+
 - `curl`
-- `jieba`（跨书呼应分词）
+- `jieba`（跨书呼应分词，`pip install jieba`；缺失时自动降级为 n-gram 兜底，质量下降）
 
 ---
 

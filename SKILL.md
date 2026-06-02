@@ -136,7 +136,7 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force
 
 - Python 3.9+
 - `curl` 命令行工具
-- `jieba`（跨书呼应分词，已预装）
+- `jieba`（跨书呼应分词，需 `pip install jieba`）—— 未安装时自动降级为 n-gram 兜底分词，回声仍可用但质量下降，并在 stderr 给出提示
 
 ---
 

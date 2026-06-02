@@ -42,7 +42,26 @@ def utc8_today_start() -> int:
     return int(start.timestamp())
 
 
+_jieba_warned = False
+
+
+def _ngram_keywords(texts, top_n=8):
+    """jieba 不可用时的兜底：对中文连续段取 2-3 字 n-gram 计频。
+    质量不如分词，但保证跨书回声不会因缺依赖而整体哑掉；agent 仍会精排。"""
+    import re
+    counter = Counter()
+    for t in texts:
+        for run in re.findall(r"[一-鿿]+", t):
+            for n in (2, 3):
+                for i in range(len(run) - n + 1):
+                    w = run[i:i + n]
+                    if w not in _STOPWORDS:
+                        counter[w] += 1
+    return [w for w, _ in counter.most_common(top_n)]
+
+
 def extract_keywords(texts, top_n=8):
+    global _jieba_warned
     try:
         import jieba
         words = []
@@ -51,7 +70,11 @@ def extract_keywords(texts, top_n=8):
         meaningful = [w for w in words if len(w) >= 2 and w not in _STOPWORDS]
         return [w for w, _ in Counter(meaningful).most_common(top_n)]
     except ImportError:
-        return []
+        if not _jieba_warned:
+            print("[daily_review] 警告：未安装 jieba，跨书回声改用 n-gram 兜底分词，"
+                  "质量下降。建议 `pip install jieba`。", file=sys.stderr)
+            _jieba_warned = True
+        return _ngram_keywords(texts, top_n)
 
 
 def find_echoes(today_book_ids, keywords, today_start_ts, max_results=6):
