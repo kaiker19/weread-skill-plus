@@ -52,6 +52,20 @@ npx skills update wechat-reading-custom   # 只更新本技能（按技能名，
 
 更新不会动 `data/`（你的知识库和 API Key 都在这里，不受影响）。
 
+### 可选：语义向量索引
+
+跨书呼应默认用 jieba + `LIKE` 字面匹配。装上 embedding 后，召回升级为语义相似——"思维 ↔ 思考 ↔ 认知"这种同义也能连上。**可选，不装也能用**（自动回退 jieba）。
+
+```bash
+pip install fastembed                        # 本地嵌入，首次自动下载中文模型 ~95MB
+python3 lib/embedding.py --backfill          # 为历史划线生成向量（~1 万条本地约 2 分钟，可中断续跑）
+python3 lib/embedding.py --test "强势思维"   # 验证语义检索
+```
+
+或改用 embedding API（OpenAI 兼容）：在 `data/embedding.json` 填 `{"endpoint","api_key","model"}`，智谱/通义/Jina/Ollama 等都支持。细节见 [SKILL.md](SKILL.md) 的「可选增强：语义向量索引」。
+
+> 首次回填要等模型下载 + 逐条嵌入，是独立步骤，不影响基础安装。向量留在本机（`data/knowledge.db`），不外传。
+
 ---
 
 ## 工作原理
@@ -76,6 +90,7 @@ cron 触发
 - Python 3.9+
 - `curl`
 - `jieba`（跨书呼应分词，`pip install jieba`；缺失时自动降级为 n-gram 兜底，质量下降）
+- 可选：`fastembed` + `numpy`（语义向量索引，见下；不装则跨书呼应走 jieba）
 
 ---
 

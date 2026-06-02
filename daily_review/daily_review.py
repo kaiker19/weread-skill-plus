@@ -152,8 +152,33 @@ def main():
     today_book_ids = set(books_active.keys())
 
     all_text = [h["content"] for h in new_highlights] + [r["content"] for r in new_reviews]
-    keywords = extract_keywords(all_text)
-    echoes = find_echoes(today_book_ids, keywords, today_start)
+
+    # 跨书呼应：优先语义检索（embedding + 余弦），无嵌入源或召回为空时回退 jieba/LIKE
+    today_records = [
+        {"source_type": "highlight", "source_id": h["highlight_id"],
+         "content": h["content"], "book_id": h["book_id"]}
+        for h in new_highlights
+    ] + [
+        {"source_type": "review", "source_id": r["review_id"],
+         "content": r["content"], "book_id": r["book_id"]}
+        for r in new_reviews
+    ]
+
+    echoes = None
+    echo_mode = "jieba"
+    try:
+        from embedding import semantic_echoes
+        echoes = semantic_echoes(today_records, today_book_ids, today_start)
+        if echoes:
+            echo_mode = "semantic"
+    except Exception as e:  # 语义层任何异常都不应阻断每日总结
+        print(f"[daily_review] 语义检索异常，回退 jieba：{e}", file=sys.stderr)
+        echoes = None
+
+    if not echoes:  # None（无嵌入源）或 []（语义无召回）→ 回退 jieba
+        keywords = extract_keywords(all_text)
+        echoes = find_echoes(today_book_ids, keywords, today_start)
+        echo_mode = "jieba"
 
     payload = {
         "date": today_str,
@@ -183,15 +208,17 @@ def main():
                 "matched_kw":  e["matched_kw"],
                 "days_ago":    e["days_ago"],
                 "source_type": e["source_type"],
+                "similarity":  e.get("similarity"),
             }
             for e in echoes
         ],
+        "echo_mode": echo_mode,
         "prompt_ref": "prompts/daily_summary.md",
     }
 
     print(f"微信读书每日回顾 | {today_str}")
     print(f"新增 {len(new_highlights)} 条划线 / {len(new_reviews)} 条批注"
-          + (f" / {len(echoes)} 条跨书呼应" if echoes else ""))
+          + (f" / {len(echoes)} 条跨书呼应（{echo_mode}）" if echoes else ""))
     print()
     print("[AGENT_DAILY_DATA]")
     print(json.dumps(payload, ensure_ascii=False))

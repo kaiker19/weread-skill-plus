@@ -120,6 +120,19 @@ CREATE TABLE IF NOT EXISTS sync_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS embeddings (
+    source_type TEXT NOT NULL,           -- 'highlight' | 'review'
+    source_id   TEXT NOT NULL,
+    book_id     TEXT NOT NULL,
+    model       TEXT NOT NULL,           -- which model produced this vector
+    dim         INTEGER NOT NULL,
+    vec         BLOB NOT NULL,           -- numpy float32 bytes
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (source_type, source_id, model)
+);
+CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(model);
+CREATE INDEX IF NOT EXISTS idx_embeddings_book  ON embeddings(book_id);
 """
 
 
@@ -463,6 +476,94 @@ def set_sync_state(key: str, value: str, db_path: Path = None):
             INSERT INTO sync_state (key, value) VALUES (?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
         """, (key, str(value)))
+
+
+# ── Embeddings (optional semantic layer) ─────────────────────────────────────
+
+def upsert_embedding(source_type: str, source_id: str, book_id: str,
+                     model: str, dim: int, vec_blob: bytes, db_path: Path = None):
+    """Store one vector (float32 bytes). Overwrites if same (source, model)."""
+    with _conn(db_path) as c:
+        c.execute("""
+            INSERT OR REPLACE INTO embeddings
+              (source_type, source_id, book_id, model, dim, vec, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (source_type, source_id, book_id, model, dim, vec_blob, int(time.time())))
+
+
+def count_embeddings(model: str = None, db_path: Path = None) -> int:
+    with _conn(db_path) as c:
+        if model:
+            return c.execute("SELECT COUNT(*) FROM embeddings WHERE model=?",
+                             (model,)).fetchone()[0]
+        return c.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+
+
+def count_sources(db_path: Path = None) -> int:
+    """Total embeddable records (highlights + reviews)."""
+    with _conn(db_path) as c:
+        h = c.execute("SELECT COUNT(*) FROM highlights").fetchone()[0]
+        r = c.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
+        return h + r
+
+
+def get_sources_missing_embedding(model: str, limit: int = None,
+                                  db_path: Path = None) -> List[dict]:
+    """Highlights/reviews that have no embedding for the given model yet."""
+    q = """
+        SELECT 'highlight' AS source_type, h.highlight_id AS source_id,
+               h.content AS content, h.book_id AS book_id
+        FROM highlights h
+        WHERE NOT EXISTS (
+            SELECT 1 FROM embeddings e
+            WHERE e.source_type='highlight' AND e.source_id=h.highlight_id AND e.model=?)
+        UNION ALL
+        SELECT 'review', r.review_id, r.content, r.book_id
+        FROM reviews r
+        WHERE NOT EXISTS (
+            SELECT 1 FROM embeddings e
+            WHERE e.source_type='review' AND e.source_id=r.review_id AND e.model=?)
+    """
+    params: List = [model, model]
+    if limit:
+        q += " LIMIT ?"
+        params.append(limit)
+    with _conn(db_path) as c:
+        return [dict(r) for r in c.execute(q, params).fetchall()]
+
+
+def load_search_embeddings(model: str, exclude_book_ids: List[str] = None,
+                           before_ts: int = None, db_path: Path = None) -> List[dict]:
+    """Load stored vectors (for a model) joined with their source content/book.
+
+    Returns dicts: source_type, source_id, book_id, vec(bytes), book_title,
+    author, content, create_time.
+    """
+    clauses = ["e.model = ?"]
+    params: List = [model]
+    if exclude_book_ids:
+        ph = ",".join("?" * len(exclude_book_ids))
+        clauses.append(f"e.book_id NOT IN ({ph})")
+        params.extend(exclude_book_ids)
+    time_clause = ""
+    if before_ts:
+        time_clause = "AND COALESCE(h.create_time, r.create_time) < ?"
+    where = " AND ".join(clauses)
+    q = f"""
+        SELECT e.source_type, e.source_id, e.book_id, e.vec,
+               b.title AS book_title, b.author AS author,
+               COALESCE(h.content, r.content) AS content,
+               COALESCE(h.create_time, r.create_time) AS create_time
+        FROM embeddings e
+        JOIN books b ON e.book_id = b.book_id
+        LEFT JOIN highlights h ON e.source_type='highlight' AND h.highlight_id=e.source_id
+        LEFT JOIN reviews   r ON e.source_type='review'    AND r.review_id=e.source_id
+        WHERE {where} {time_clause}
+    """
+    if before_ts:
+        params.append(before_ts)
+    with _conn(db_path) as c:
+        return [dict(r) for r in c.execute(q, params).fetchall()]
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────
