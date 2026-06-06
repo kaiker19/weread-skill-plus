@@ -9,7 +9,6 @@
 import json
 import sys
 import time
-from collections import Counter
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -20,91 +19,11 @@ from sync import sync_all
 from knowledge_base import (
     get_highlights_since,
     get_reviews_since,
-    search_content,
 )
+from echoes import extract_keywords, find_echoes
 
 CHINA_TZ = timezone(timedelta(hours=8))
 WEEK_DAYS = 7
-
-_STOPWORDS = {
-    "的", "了", "是", "在", "我", "有", "和", "就", "不", "人", "都", "一",
-    "上", "也", "很", "到", "说", "要", "去", "你", "会", "着", "没有",
-    "看", "好", "自己", "这", "那", "里", "不是", "他", "她", "它",
-    "我们", "他们", "这个", "那个", "什么", "如果", "但是", "因为", "所以",
-    "可以", "已经", "这样", "这种", "一种", "通过", "一些", "这些", "只是",
-    "而且", "并且", "或者", "然后", "其实", "对于", "关于", "包括", "以及",
-    "时候", "方式", "问题", "事情", "时间", "一个", "一样",
-}
-
-_jieba_warned = False
-
-
-def _ngram_keywords(texts, top_n=12):
-    import re
-    counter = Counter()
-    for t in texts:
-        for run in re.findall(r"[一-鿿]+", t):
-            for n in (2, 3):
-                for i in range(len(run) - n + 1):
-                    w = run[i:i + n]
-                    if w not in _STOPWORDS:
-                        counter[w] += 1
-    return [w for w, _ in counter.most_common(top_n)]
-
-
-def extract_keywords(texts, top_n=12):
-    global _jieba_warned
-    try:
-        import jieba
-        words = []
-        for t in texts:
-            words.extend(jieba.cut(t))
-        meaningful = [w for w in words if len(w) >= 2 and w not in _STOPWORDS]
-        return [w for w, _ in Counter(meaningful).most_common(top_n)]
-    except ImportError:
-        if not _jieba_warned:
-            print("[weekly_review] 警告：未安装 jieba，改用 n-gram 兜底", file=sys.stderr)
-            _jieba_warned = True
-        return _ngram_keywords(texts, top_n)
-
-
-def find_echoes(week_book_ids, keywords, week_start_ts, max_results=6):
-    """同 daily_review.find_echoes：关键词粗排，每本书取得分最高一条。"""
-    if not keywords:
-        return []
-
-    seen_keys = set()
-    candidates = []
-    now_ts = int(time.time())
-
-    for kw in keywords:
-        results = search_content(
-            keyword=kw,
-            exclude_book_ids=list(week_book_ids) if week_book_ids else None,
-            before_ts=week_start_ts,
-            limit=3,
-        )
-        for c in results:
-            dedup_key = (c["book_title"], c["content"][:50])
-            if dedup_key in seen_keys:
-                for item in candidates:
-                    if (item["book_title"], item["content"][:50]) == dedup_key:
-                        item["_score"] += 1
-                        break
-                continue
-            seen_keys.add(dedup_key)
-            c["days_ago"] = max(0, (now_ts - (c.get("create_time") or now_ts)) // 86400)
-            c["_score"] = 2 if c.get("source_type") == "review" else 1
-            candidates.append(c)
-
-    book_best = {}
-    for c in candidates:
-        t = c["book_title"]
-        if t not in book_best or c["_score"] > book_best[t]["_score"]:
-            book_best[t] = c
-
-    sorted_c = sorted(book_best.values(), key=lambda x: -x["_score"])
-    return [{k: v for k, v in c.items() if k != "_score"} for c in sorted_c[:max_results]]
 
 
 def group_by_book(highlights, reviews):
@@ -165,7 +84,8 @@ def main():
     echo_mode = "jieba"
     try:
         from embedding import semantic_echoes
-        echoes = semantic_echoes(week_records, week_book_ids, week_start_ts)
+        # store=False：本周条目已在每日流程嵌入过，无需重复跑模型
+        echoes = semantic_echoes(week_records, week_book_ids, week_start_ts, store=False)
         if echoes:
             echo_mode = "semantic"
     except Exception as e:
@@ -174,7 +94,7 @@ def main():
 
     if not echoes:
         all_text = [h["content"] for h in highlights] + [r["content"] for r in reviews]
-        keywords = extract_keywords(all_text)
+        keywords = extract_keywords(all_text, top_n=12)
         echoes   = find_echoes(week_book_ids, keywords, week_start_ts)
         echo_mode = "jieba"
 

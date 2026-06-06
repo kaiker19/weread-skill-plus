@@ -234,29 +234,42 @@ def _normalize(np, mat):
     return mat / norms
 
 
+# 批注（用户自己的思考）在召回里小幅提权，与 jieba 兜底路径的口径一致
+_REVIEW_BOOST = 0.03
+
+
 def semantic_echoes(today_records, today_book_ids, before_ts,
-                    max_results=6, min_sim=0.0):
+                    max_results=6, min_sim=0.0, store=True):
     """Embedding-based cross-book echoes.
 
     Returns None if no embedding source (caller should fall back to jieba),
     or a list (possibly empty) of echo dicts compatible with the jieba path:
       book_title, author, content, matched_kw, days_ago, source_type, similarity
+
+    store=True 时把 today_records 的向量写入索引（每日流程用）；weekly 等
+    条目已嵌入的场景传 store=False，避免重复跑模型。排序对 review 小幅提权
+    （展示的 similarity 仍是真实余弦）。
     """
     src = _resolve_source()
     if src is None:
         return None
     np = _np()
 
-    today_texts = [r["content"] for r in today_records if r.get("content")]
-    if not today_texts:
+    recs = [r for r in today_records if r.get("content")]
+    if not recs:
         return []
 
-    # Make sure today's items are in the index for future days (cheap).
-    embed_records(today_records, src=src)
-
-    qvecs = embed_texts(today_texts, src)
+    # 只嵌入一次：既用作查询向量，必要时也写入索引
+    qvecs = embed_texts([r["content"] for r in recs], src)
     if not qvecs:
         return []
+    if store:
+        model = src["model"]
+        for rec, v in zip(recs, qvecs):
+            arr = np.asarray(v, dtype=np.float32)
+            upsert_embedding(rec["source_type"], rec["source_id"], rec["book_id"],
+                             model, int(arr.shape[0]), arr.tobytes())
+
     q = _normalize(np, np.asarray(qvecs, dtype=np.float32))
 
     rows = load_search_embeddings(src["model"],
@@ -274,23 +287,22 @@ def semantic_echoes(today_records, today_book_ids, before_ts,
     best = sims.max(axis=1)        # best match to any of today's items
 
     now_ts = int(time.time())
-    scored = []
-    for r, s in zip(rows, best):
-        if s < min_sim:
-            continue
-        scored.append((float(s), r))
 
-    # one best row per book
+    # 每本书保留一条：按「提权后分数」排，但展示真实余弦
     book_best = {}
-    for s, r in scored:
+    for r, s in zip(rows, best):
+        raw = float(s)
+        if raw < min_sim:
+            continue
+        eff = raw + (_REVIEW_BOOST if r.get("source_type") == "review" else 0.0)
         t = r["book_title"]
-        if t not in book_best or s > book_best[t][0]:
-            book_best[t] = (s, r)
+        if t not in book_best or eff > book_best[t][0]:
+            book_best[t] = (eff, raw, r)
 
     ordered = sorted(book_best.values(), key=lambda x: -x[0])[:max_results]
 
     echoes = []
-    for s, r in ordered:
+    for eff, raw, r in ordered:
         ct = r.get("create_time") or now_ts
         echoes.append({
             "book_title":  r["book_title"],
@@ -299,7 +311,7 @@ def semantic_echoes(today_records, today_book_ids, before_ts,
             "matched_kw":  "语义相近",
             "days_ago":    max(0, (now_ts - ct) // 86400),
             "source_type": r["source_type"],
-            "similarity":  round(s, 3),
+            "similarity":  round(raw, 3),
         })
     return echoes
 
