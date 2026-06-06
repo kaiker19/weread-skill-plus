@@ -304,6 +304,63 @@ def semantic_echoes(today_records, today_book_ids, before_ts,
     return echoes
 
 
+def semantic_search(query_text, exclude_book_ids=None, before_ts=None,
+                    max_results=10, min_sim=0.0):
+    """Read-only semantic search for the web/query path.
+
+    Unlike semantic_echoes (which is part of the daily write flow and stores
+    the day's items), this NEVER writes to the DB. Returns None if no embedding
+    source, else a list (possibly empty) of dicts including book_id so callers
+    can link to the book.
+    """
+    src = _resolve_source()
+    if src is None:
+        return None
+    np = _np()
+    text = (query_text or "").strip()
+    if not text:
+        return []
+
+    qvecs = embed_texts([text], src)
+    if not qvecs:
+        return []
+    q = _normalize(np, np.asarray(qvecs, dtype=np.float32))
+
+    rows = load_search_embeddings(src["model"],
+                                  exclude_book_ids=exclude_book_ids,
+                                  before_ts=before_ts)
+    if not rows:
+        return []
+
+    cand = np.frombuffer(b"".join(r["vec"] for r in rows), dtype=np.float32)
+    cand = _normalize(np, cand.reshape(len(rows), q.shape[1]))
+    sims = (cand @ q.T).ravel()
+
+    now_ts = int(time.time())
+    book_best = {}
+    for r, s in zip(rows, sims):
+        if s < min_sim:
+            continue
+        t = r["book_title"]
+        if t not in book_best or s > book_best[t][0]:
+            book_best[t] = (float(s), r)
+
+    ordered = sorted(book_best.values(), key=lambda x: -x[0])[:max_results]
+    out = []
+    for s, r in ordered:
+        ct = r.get("create_time") or now_ts
+        out.append({
+            "book_id":     r["book_id"],
+            "book_title":  r["book_title"],
+            "author":      r.get("author", ""),
+            "content":     r["content"],
+            "source_type": r["source_type"],
+            "days_ago":    max(0, (now_ts - ct) // 86400),
+            "similarity":  round(s, 3),
+        })
+    return out
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 def _cli():

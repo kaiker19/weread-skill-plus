@@ -1,7 +1,7 @@
 ---
 name: wechat-reading-custom
-description: 微信读书扩展技能 — 每日阅读回顾（跨书呼应）+ 读后总结 + 笔记导出 + 语义知识库
-version: 2.0.0
+description: 微信读书扩展技能 — 每日阅读回顾（跨书呼应 + 空日历史回声）+ 周回顾 + 读后总结 + 笔记导出 + 语义知识库
+version: 2.1.0
 ---
 
 # 微信读书扩展技能
@@ -31,7 +31,9 @@ version: 2.0.0
 python3 ~/.openclaw/workspace/skills/wechat-reading-custom/daily_review/daily_review.py
 ```
 
-**输出**：无新内容时静默；有内容时输出 `[AGENT_DAILY_DATA]` JSON，agent LLM 使用 `prompts/daily_summary.md` 合成。
+**输出**：有新内容时输出 `[AGENT_DAILY_DATA]` JSON；无新内容时输出含 `historical_echo` 字段的 JSON（随机取一条历史批注/划线，优先批注）；两者均无时静默。
+
+跨书呼应评分：批注（review）初始分 2，划线（highlight）初始分 1，优先呈现用户自己的思考。
 
 **JSON 结构**：
 ```json
@@ -41,6 +43,7 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/daily_review/daily_re
   "new_highlights": [{"book_title": "...", "content": "...", "chapter_title": "..."}],
   "new_reviews":    [{"book_title": "...", "content": "..."}],
   "cross_book_echoes": [{"book_title": "...", "content": "...", "matched_kw": "...", "days_ago": 42}],
+  "historical_echo": {"content": "...", "book_title": "...", "days_ago": 119, "source_type": "review"},
   "prompt_ref": "prompts/daily_summary.md"
 }
 ```
@@ -90,6 +93,35 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/notes_export/notes_ex
 ```
 
 **输出文件**：`~/.openclaw/workspace/data/weread_notes_export.json`
+
+---
+
+## 能力四：周回顾
+
+**功能**：汇总过去 7 天的划线 + 批注，提炼跨日阅读主线，附跨周历史回声
+
+**脚本**：`weekly_review/weekly_review.py`
+
+**触发**：cron `weread-weekly-review` 每周六 21:00 Asia/Shanghai
+
+**独立测试**：
+```bash
+python3 ~/.openclaw/workspace/skills/wechat-reading-custom/weekly_review/weekly_review.py
+```
+
+**输出**：本周无新内容时静默；有内容时输出 `[AGENT_WEEKLY_DATA]` JSON，agent LLM 使用 `prompts/weekly_summary.md` 合成。
+
+**JSON 结构**：
+```json
+{
+  "week_range": "2026-05-30 ~ 2026-06-06",
+  "stats": {"books": 2, "highlights": 45, "reviews": 3},
+  "books": [{"book_id": "...", "book_title": "...", "author": "...", "highlights": [...], "reviews": [...]}],
+  "cross_week_echoes": [{"book_title": "...", "content": "...", "days_ago": 120, "similarity": 0.81}],
+  "echo_mode": "semantic",
+  "prompt_ref": "prompts/weekly_summary.md"
+}
+```
 
 ---
 

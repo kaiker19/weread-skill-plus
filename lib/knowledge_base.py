@@ -303,6 +303,32 @@ def get_reviews_for_book(book_id: str, db_path: Path = None) -> List[dict]:
         return [dict(r) for r in rows]
 
 
+def get_random_record(before_ts: int, db_path: Path = None) -> Optional[dict]:
+    """Pick one random record from history (before before_ts).
+    Prefers reviews (user's own thoughts); falls back to highlights longer than 40 chars.
+    """
+    with _conn(db_path) as c:
+        # 1. Try a random review first
+        row = c.execute("""
+            SELECT r.content, b.title AS book_title, b.author,
+                   r.create_time, 'review' AS source_type
+            FROM reviews r JOIN books b ON r.book_id = b.book_id
+            WHERE r.create_time < ? AND length(r.content) > 10
+            ORDER BY RANDOM() LIMIT 1
+        """, (before_ts,)).fetchone()
+        if row:
+            return dict(row)
+        # 2. Fall back to highlights with a minimum length to avoid fragments
+        row = c.execute("""
+            SELECT h.content, b.title AS book_title, b.author,
+                   h.create_time, 'highlight' AS source_type
+            FROM highlights h JOIN books b ON h.book_id = b.book_id
+            WHERE h.create_time < ? AND length(h.content) > 40
+            ORDER BY RANDOM() LIMIT 1
+        """, (before_ts,)).fetchone()
+        return dict(row) if row else None
+
+
 # ── Concepts ───────────────────────────────────────────────────────────────
 
 def insert_concepts(source_type: str, source_id: str, book_id: str,
@@ -397,7 +423,7 @@ def search_content(keyword: str, exclude_book_ids: List[str] = None,
         hl_params.append(limit)
 
         highlights = c.execute(f"""
-            SELECT h.content, b.title AS book_title, b.author,
+            SELECT h.content, b.book_id, b.title AS book_title, b.author,
                    h.create_time, 'highlight' AS source_type
             FROM highlights h
             JOIN books b ON h.book_id = b.book_id
@@ -418,7 +444,7 @@ def search_content(keyword: str, exclude_book_ids: List[str] = None,
         rv_params.append(limit)
 
         reviews = c.execute(f"""
-            SELECT r.content, b.title AS book_title, b.author,
+            SELECT r.content, b.book_id, b.title AS book_title, b.author,
                    r.create_time, 'review' AS source_type
             FROM reviews r
             JOIN books b ON r.book_id = b.book_id

@@ -20,6 +20,7 @@ from sync import sync_all
 from knowledge_base import (
     get_highlights_since,
     get_reviews_since,
+    get_random_record,
     search_content,
 )
 
@@ -109,7 +110,7 @@ def find_echoes(today_book_ids, keywords, today_start_ts, max_results=6):
                 continue
             seen_content_keys.add(dedup_key)
             c["days_ago"] = max(0, (now_ts - (c.get("create_time") or now_ts)) // 86400)
-            c["_score"] = 1
+            c["_score"] = 2 if c.get("source_type") == "review" else 1
             all_candidates.append(c)
 
     # 每本书只保留得分最高的 1 条
@@ -135,6 +136,24 @@ def main():
     new_reviews = get_reviews_since(today_start)
 
     if not new_highlights and not new_reviews:
+        rec = get_random_record(today_start)
+        if rec:
+            now_ts = int(time.time())
+            rec["days_ago"] = max(0, (now_ts - (rec.get("create_time") or now_ts)) // 86400)
+            payload = {
+                "date":              today_str,
+                "books_active":      [],
+                "new_highlights":    [],
+                "new_reviews":       [],
+                "cross_book_echoes": [],
+                "historical_echo":   rec,
+                "prompt_ref":        "prompts/daily_summary.md",
+            }
+            print(f"微信读书每日回顾 | {today_str}")
+            print(f"今日无新内容，历史回声来自 {rec['days_ago']} 天前《{rec['book_title']}》")
+            print()
+            print("[AGENT_DAILY_DATA]")
+            print(json.dumps(payload, ensure_ascii=False))
         return
 
     books_active = {}
