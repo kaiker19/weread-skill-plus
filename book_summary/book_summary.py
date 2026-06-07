@@ -135,30 +135,32 @@ _COLD_START_DAYS = 30
 
 
 def main():
+    backfill = "--backfill" in sys.argv
     run_all = "--all" in sys.argv
-
-    # 检查是否首次运行 book_summary（独立标志，不依赖 last_sync_ts）
-    is_cold_start = get_sync_state("book_summary_initialized", "0") == "0"
 
     sync_all(verbose=False)
 
-    if run_all:
-        since_ts = None
-    elif is_cold_start:
-        since_ts = int(time.time()) - _COLD_START_DAYS * 86400
+    if backfill:
+        # 批量回填：所有"读完/有划线且无总结"的书（历史也覆盖）
+        from knowledge_base import get_books_needing_summary
+        books = get_books_needing_summary()
     else:
-        since_ts = None
+        # 每日增量：检测新完读。冷启动只看近 30 天，避免历史积压一次性爆量。
+        is_cold_start = get_sync_state("book_summary_initialized", "0") == "0"
+        if run_all:
+            since_ts = None
+        elif is_cold_start:
+            since_ts = int(time.time()) - _COLD_START_DAYS * 86400
+        else:
+            since_ts = None
+        books = get_newly_finished_books(since_ts=since_ts)
+        if is_cold_start:
+            set_sync_state("book_summary_initialized", "1")
 
-    finished_books = get_newly_finished_books(since_ts=since_ts)
-
-    # 首次运行完成后设置初始化标志（无论有无结果）
-    if is_cold_start:
-        set_sync_state("book_summary_initialized", "1")
-
-    if not finished_books:
+    if not books:
         return
 
-    for book in finished_books:
+    for book in books:
         title = book.get("title", book["book_id"])
         payload = build_payload(book)
 
@@ -166,16 +168,12 @@ def main():
         print(f"划线 {len(payload['my_highlights'])} 条 / "
               f"批注 {len(payload['my_reviews'])} 条 / "
               f"大众热门 {len(payload['popular_highlights'])} 条")
+        print(f"book_id={book['book_id']}")
         print()
         print("[AGENT_BOOK_SUMMARY_DATA]")
         print(json.dumps(payload, ensure_ascii=False))
         print()
-
-        save_summary(
-            summary_type="book_completion",
-            content="[pending — agent will fill]",
-            book_id=book["book_id"],
-        )
+        # 不再写 [pending] 占位；由 agent 合成后调 lib/save_summary.py 回写真内容。
 
 
 if __name__ == "__main__":

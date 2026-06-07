@@ -468,7 +468,14 @@ def search_content(keyword: str, exclude_book_ids: List[str] = None,
 def save_summary(summary_type: str, content: str,
                  book_id: str = None, date: str = None,
                  db_path: Path = None):
+    """Upsert: 一本书（或一天）只保留一条最新总结，避免重复堆积。"""
     with _conn(db_path) as c:
+        if book_id is not None:
+            c.execute("DELETE FROM summaries WHERE summary_type=? AND book_id=?",
+                      (summary_type, book_id))
+        elif date is not None:
+            c.execute("DELETE FROM summaries WHERE summary_type=? AND date=?",
+                      (summary_type, date))
         c.execute("""
             INSERT INTO summaries (summary_type, book_id, date, content, created_at)
             VALUES (?, ?, ?, ?, ?)
@@ -477,15 +484,49 @@ def save_summary(summary_type: str, content: str,
 
 def get_latest_summary(summary_type: str, book_id: str = None,
                         date: str = None, db_path: Path = None) -> Optional[dict]:
+    """最新的真实总结。忽略 [pending 占位记录（视为无总结）。"""
     with _conn(db_path) as c:
         row = c.execute("""
             SELECT * FROM summaries
             WHERE summary_type = ?
               AND (book_id IS NULL OR book_id = ?)
               AND (date IS NULL OR date = ?)
+              AND content NOT LIKE '[pending%'
             ORDER BY created_at DESC LIMIT 1
         """, (summary_type, book_id, date)).fetchone()
         return dict(row) if row else None
+
+
+def get_books_needing_summary(db_path: Path = None) -> List[dict]:
+    """读完或有划线、且尚无真实读后总结的书（批量回填用）。"""
+    with _conn(db_path) as c:
+        rows = c.execute("""
+            SELECT b.* FROM books b
+            WHERE (b.finish_time IS NOT NULL
+                   OR EXISTS (SELECT 1 FROM highlights h WHERE h.book_id = b.book_id))
+              AND NOT EXISTS (
+                  SELECT 1 FROM summaries s
+                  WHERE s.summary_type = 'book_completion'
+                    AND s.book_id = b.book_id
+                    AND s.content NOT LIKE '[pending%')
+            ORDER BY b.finish_time DESC NULLS LAST, b.last_read_time DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+
+def load_book_embeddings(book_id: str, model: str, source_type: str = "highlight",
+                         db_path: Path = None) -> List[dict]:
+    """某本书某类型的向量（提取式速览用）。返回 source_id / vec / content。"""
+    with _conn(db_path) as c:
+        rows = c.execute("""
+            SELECT e.source_id, e.vec,
+                   COALESCE(h.content, r.content) AS content
+            FROM embeddings e
+            LEFT JOIN highlights h ON e.source_type='highlight' AND h.highlight_id=e.source_id
+            LEFT JOIN reviews   r ON e.source_type='review'    AND r.review_id=e.source_id
+            WHERE e.book_id=? AND e.model=? AND e.source_type=?
+        """, (book_id, model, source_type)).fetchall()
+        return [dict(r) for r in rows]
 
 
 # ── Sync State ─────────────────────────────────────────────────────────────
@@ -523,6 +564,17 @@ def count_embeddings(model: str = None, db_path: Path = None) -> int:
             return c.execute("SELECT COUNT(*) FROM embeddings WHERE model=?",
                              (model,)).fetchone()[0]
         return c.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+
+
+def get_primary_model(db_path: Path = None) -> Optional[str]:
+    """Model name with the most stored vectors. Lets read-only consumers
+    (web insight endpoints) use embeddings without a runtime embedding source."""
+    with _conn(db_path) as c:
+        row = c.execute("""
+            SELECT model FROM embeddings
+            GROUP BY model ORDER BY COUNT(*) DESC LIMIT 1
+        """).fetchone()
+        return row["model"] if row else None
 
 
 def count_sources(db_path: Path = None) -> int:

@@ -33,6 +33,7 @@ from knowledge_base import (
     upsert_embedding,
     count_embeddings,
     count_sources,
+    get_primary_model,
     get_sources_missing_embedding,
     load_search_embeddings,
 )
@@ -229,15 +230,34 @@ def backfill(limit=None, verbose=True):
 # ── Semantic echoes ──────────────────────────────────────────────────────────
 
 def _normalize(np, mat):
+    mat = np.nan_to_num(np.asarray(mat, dtype=np.float32),
+                        nan=0.0, posinf=0.0, neginf=0.0)
     norms = np.linalg.norm(mat, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
     return mat / norms
+
+
+def _quiet_fp(fn):
+    """抑制 numpy+Accelerate 对矩阵乘发出的伪 RuntimeWarning
+    （divide by zero / overflow / invalid encountered in matmul，macOS 已知问题，
+    数据已验证全有限、结果正确）。"""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        np = _np()
+        if np is None:
+            return fn(*args, **kwargs)
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 # 批注（用户自己的思考）在召回里小幅提权，与 jieba 兜底路径的口径一致
 _REVIEW_BOOST = 0.03
 
 
+@_quiet_fp
 def semantic_echoes(today_records, today_book_ids, before_ts,
                     max_results=6, min_sim=0.0, store=True):
     """Embedding-based cross-book echoes.
@@ -316,6 +336,7 @@ def semantic_echoes(today_records, today_book_ids, before_ts,
     return echoes
 
 
+@_quiet_fp
 def semantic_search(query_text, exclude_book_ids=None, before_ts=None,
                     max_results=10, min_sim=0.0):
     """Read-only semantic search for the web/query path.
@@ -371,6 +392,200 @@ def semantic_search(query_text, exclude_book_ids=None, before_ts=None,
             "similarity":  round(s, 3),
         })
     return out
+
+
+# ── Insight engines (read-only, pure numpy over stored vectors) ──────────────
+# 这些只读已存向量，不需要运行期 embedding 源（web 端即使没装 fastembed 也能用）。
+
+def _load_all_vectors(model):
+    """Return (rows, normalized matrix) for all stored vectors of a model."""
+    np = _np()
+    if np is None or not model:
+        return None, None
+    rows = load_search_embeddings(model)
+    if not rows:
+        return None, None
+    mat = np.frombuffer(b"".join(r["vec"] for r in rows), dtype=np.float32)
+    mat = mat.reshape(len(rows), -1)
+    return rows, _normalize(np, mat)
+
+
+def _recent_indices(rows, recent_days, fallback_n=50):
+    """Indices of highlights/reviews from the last `recent_days`; if none,
+    the `fallback_n` most recent by create_time."""
+    now = int(time.time())
+    cutoff = now - recent_days * 86400
+    idx = [i for i, r in enumerate(rows) if (r.get("create_time") or 0) >= cutoff]
+    if idx:
+        return idx
+    order = sorted(range(len(rows)), key=lambda i: -(rows[i].get("create_time") or 0))
+    return order[:fallback_n]
+
+
+def _meta(r):
+    now = int(time.time())
+    ct = r.get("create_time") or now
+    return {
+        "content":    r["content"],
+        "book_id":    r["book_id"],
+        "book_title": r["book_title"],
+        "author":     r.get("author", ""),
+        "days_ago":   max(0, (now - ct) // 86400),
+    }
+
+
+@_quiet_fp
+def cross_book_connections(limit=3, recent_days=30):
+    """锚定最近阅读：为最近的划线找其他书里语义最近的历史划线，组成对照对。
+    返回 [{anchor, echo, similarity}]，echo 与 anchor 必来自不同书。"""
+    np = _np()
+    model = get_primary_model()
+    rows, mat = _load_all_vectors(model)
+    if rows is None:
+        return []
+
+    recent_idx = _recent_indices(rows, recent_days)
+    book_ids = np.array([r["book_id"] for r in rows], dtype=object)
+    rec_mat = mat[recent_idx]                     # (R, dim)
+    sims_all = mat @ rec_mat.T                     # (N, R)
+
+    pairs = []
+    for col, ai in enumerate(recent_idx):
+        sims = sims_all[:, col].copy()
+        sims[book_ids == rows[ai]["book_id"]] = -1.0   # 排除同书与自身
+        bi = int(sims.argmax())
+        s = float(sims[bi])
+        if s > 0:
+            pairs.append((s, ai, bi))
+
+    pairs.sort(key=lambda x: -x[0])
+    out, seen_echo, seen_pair = [], set(), set()
+    for s, ai, bi in pairs:
+        a, e = rows[ai], rows[bi]
+        if e["source_id"] in seen_echo:
+            continue
+        bp = tuple(sorted([a["book_id"], e["book_id"]]))
+        if bp in seen_pair:
+            continue
+        seen_echo.add(e["source_id"])
+        seen_pair.add(bp)
+        out.append({"anchor": _meta(a), "echo": _meta(e), "similarity": round(s, 3)})
+        if len(out) >= limit:
+            break
+    return out
+
+
+@_quiet_fp
+def daily_reread(min_age_days=90, recent_days=30, top_k=20):
+    """浮现一条够旧、且呼应最近阅读的划线/批注。按当天定种子，一天稳定、每天换。"""
+    np = _np()
+    model = get_primary_model()
+    rows, mat = _load_all_vectors(model)
+    if rows is None:
+        return None
+
+    now = int(time.time())
+    old_cutoff = now - min_age_days * 86400
+    old_idx = [i for i, r in enumerate(rows) if (r.get("create_time") or 0) < old_cutoff]
+    if not old_idx:
+        return None
+
+    recent_idx = _recent_indices(rows, recent_days)
+    anchor = _normalize(np, mat[recent_idx].mean(axis=0, keepdims=True))[0]  # (dim,)
+
+    old_mat = mat[old_idx]
+    sims = old_mat @ anchor                         # (len old,)
+    k = min(top_k, len(old_idx))
+    topk_local = np.argsort(-sims)[:k]
+    seed = int(now // 86400)                         # 按天轮换
+    pick_local = int(topk_local[seed % k])
+    chosen = old_idx[pick_local]
+    r = rows[chosen]
+
+    # "为什么现在"：最近阅读里与之最相近的那本书
+    rec_sims = mat[recent_idx] @ mat[chosen]
+    why_book = rows[recent_idx[int(rec_sims.argmax())]]["book_title"]
+
+    out = _meta(r)
+    out["source_type"] = r["source_type"]
+    out["why"] = {"anchor_book_title": why_book}
+    return out
+
+
+@_quiet_fp
+def cluster_recent_themes(days=30, max_k=4):
+    """近 days 划线按向量聚类，返回 [{label_content, book_title, count, book_count}]。
+    纯 numpy k-means(余弦=归一化点积);代表句取离簇心最近的一条。"""
+    np = _np()
+    model = get_primary_model()
+    rows, mat = _load_all_vectors(model)
+    if rows is None:
+        return []
+
+    now = int(time.time())
+    cutoff = now - days * 86400
+    idx = [i for i, r in enumerate(rows) if (r.get("create_time") or 0) >= cutoff]
+    if len(idx) < 8:
+        return []
+
+    sub = mat[idx]                                  # (n, dim) 已归一化
+    n = len(idx)
+    k = min(max_k, max(2, n // 12))
+
+    rng = np.random.default_rng(int(now // 86400))  # 按天稳定
+    # k-means++ 选初始中心
+    centers = [sub[rng.integers(n)]]
+    for _ in range(k - 1):
+        d = 1.0 - (sub @ np.array(centers).T).max(axis=1)   # 到最近中心的距离
+        d = np.clip(d, 0, None)
+        probs = d / d.sum() if d.sum() > 0 else None
+        centers.append(sub[rng.choice(n, p=probs)])
+    centers = _normalize(np, np.array(centers))
+
+    assign = None
+    for _ in range(10):
+        assign = (sub @ centers.T).argmax(axis=1)
+        new = []
+        for c in range(k):
+            pts = sub[assign == c]
+            new.append(centers[c] if len(pts) == 0 else pts.mean(axis=0))
+        centers = _normalize(np, np.array(new))
+
+    themes = []
+    for c in range(k):
+        members = [idx[j] for j in range(n) if assign[j] == c]
+        if not members:
+            continue
+        msub = mat[members]
+        rep = members[int((msub @ centers[c]).argmax())]
+        themes.append({
+            "label_content": rows[rep]["content"],
+            "book_title":    rows[rep]["book_title"],
+            "count":         len(members),
+            "book_count":    len({rows[m]["book_id"] for m in members}),
+        })
+    themes.sort(key=lambda x: -x["count"])
+    return themes
+
+
+@_quiet_fp
+def representative_highlights(book_id, n=6):
+    """提取式速览：取离本书划线质心最近的 n 条，作为最具代表性的划线（纯向量）。"""
+    np = _np()
+    model = get_primary_model()
+    if np is None or not model:
+        return []
+    from knowledge_base import load_book_embeddings
+    rows = load_book_embeddings(book_id, model, source_type="highlight")
+    if not rows:
+        return []
+    mat = np.frombuffer(b"".join(r["vec"] for r in rows), dtype=np.float32)
+    mat = _normalize(np, mat.reshape(len(rows), -1))
+    centroid = _normalize(np, mat.mean(axis=0, keepdims=True))[0]
+    sims = mat @ centroid
+    order = np.argsort(-sims)[:n]
+    return [{"content": rows[i]["content"], "similarity": round(float(sims[i]), 3)}
+            for i in order]
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
