@@ -22,6 +22,7 @@ CLI:
 """
 
 import json
+import random
 import subprocess
 import sys
 import time
@@ -422,6 +423,12 @@ def _recent_indices(rows, recent_days, fallback_n=50):
     return order[:fallback_n]
 
 
+def _latest_indices(rows, n=24):
+    """最近读的 n 条（按 create_time 倒序）。洞见锚定"你刚读的"，而不是
+    30 天里相似度最高的——这样今天读什么，洞见就反映什么。"""
+    return sorted(range(len(rows)), key=lambda i: -(rows[i].get("create_time") or 0))[:n]
+
+
 def _meta(r):
     now = int(time.time())
     ct = r.get("create_time") or now
@@ -435,8 +442,8 @@ def _meta(r):
 
 
 @_quiet_fp
-def cross_book_connections(limit=3, recent_days=30):
-    """锚定最近阅读：为最近的划线找其他书里语义最近的历史划线，组成对照对。
+def cross_book_connections(limit=3, anchor_n=24, min_sim=0.78):
+    """锚定"你最新读的"那批划线：为它们找其他书里语义最近的历史划线，组成对照对。
     返回 [{anchor, echo, similarity}]，echo 与 anchor 必来自不同书。"""
     np = _np()
     model = get_primary_model()
@@ -444,7 +451,7 @@ def cross_book_connections(limit=3, recent_days=30):
     if rows is None:
         return []
 
-    recent_idx = _recent_indices(rows, recent_days)
+    recent_idx = _latest_indices(rows, anchor_n)   # 锚定最新读的那批
     book_ids = np.array([r["book_id"] for r in rows], dtype=object)
     rec_mat = mat[recent_idx]                     # (R, dim)
     sims_all = mat @ rec_mat.T                     # (N, R)
@@ -458,8 +465,9 @@ def cross_book_connections(limit=3, recent_days=30):
         if s > 0:
             pairs.append((s, ai, bi))
 
+    # 先按相似度去重，得到一池"较强候选"，再从中随机挑——保质量又有新鲜感（换一批会变）
     pairs.sort(key=lambda x: -x[0])
-    out, seen_echo, seen_pair = [], set(), set()
+    pool, seen_echo, seen_pair = [], set(), set()
     for s, ai, bi in pairs:
         a, e = rows[ai], rows[bi]
         if e["source_id"] in seen_echo:
@@ -469,10 +477,21 @@ def cross_book_connections(limit=3, recent_days=30):
             continue
         seen_echo.add(e["source_id"])
         seen_pair.add(bp)
-        out.append({"anchor": _meta(a), "echo": _meta(e), "similarity": round(s, 3)})
-        if len(out) >= limit:
+        pool.append((s, ai, bi))
+        if len(pool) >= max(limit * 3, 8):   # 取 top 一池（如 8-9 条）
             break
-    return out
+
+    # 抬阈值提准：只从足够强的候选里挑（宁少勿滥）；若一条都没过线，保底给最强的 1 条
+    strong = [p for p in pool if p[0] >= min_sim]
+    if strong:
+        chosen = random.sample(strong, min(limit, len(strong)))
+    elif pool:
+        chosen = [max(pool, key=lambda x: x[0])]   # 不空场：给最准的一条
+    else:
+        chosen = []
+    chosen.sort(key=lambda x: -x[0])
+    return [{"anchor": _meta(rows[ai]), "echo": _meta(rows[bi]), "similarity": round(s, 3)}
+            for s, ai, bi in chosen]
 
 
 @_quiet_fp
@@ -490,7 +509,7 @@ def daily_reread(min_age_days=90, recent_days=30, top_k=20):
     if not old_idx:
         return None
 
-    recent_idx = _recent_indices(rows, recent_days)
+    recent_idx = _latest_indices(rows, recent_days if recent_days < 60 else 24)
     anchor = _normalize(np, mat[recent_idx].mean(axis=0, keepdims=True))[0]  # (dim,)
 
     old_mat = mat[old_idx]
@@ -586,6 +605,270 @@ def representative_highlights(book_id, n=6):
     order = np.argsort(-sims)[:n]
     return [{"content": rows[i]["content"], "similarity": round(float(sims[i]), 3)}
             for i in order]
+
+
+@_quiet_fp
+def hybrid_search(query, limit=20, k_dense=40, k_sparse=40, rrf_k=60, mmr_lambda=0.72):
+    """混合检索：语义(dense)+关键词(sparse)用 RRF 融合排名，再 MMR 去冗余。
+    catch 精确词(人名/短语)又懂语义，结果相关且不重复。无嵌入源 → 退化关键词。"""
+    from knowledge_base import search_content
+    np = _np()
+    src = _resolve_source()
+    model = get_primary_model()
+    if src is None or np is None or not model:
+        return search_content(keyword=query, limit=limit)
+
+    rows = load_search_embeddings(model)   # 全部划线+批注向量及元数据
+    if not rows:
+        return search_content(keyword=query, limit=limit)
+    qv = embed_texts([query], src)
+    if not qv:
+        return search_content(keyword=query, limit=limit)
+
+    q = _normalize(np, np.asarray(qv, dtype=np.float32))[0]
+    cand = np.frombuffer(b"".join(r["vec"] for r in rows), dtype=np.float32).reshape(len(rows), -1)
+    cand = _normalize(np, cand)
+    sims = cand @ q
+
+    dense_idx = list(map(int, np.argsort(-sims)[:k_dense]))
+    ql = query.strip()
+    sparse_idx = [i for i, r in enumerate(rows) if ql and ql in r["content"]][:k_sparse]
+
+    # RRF 融合
+    rrf = {}
+    for rank, i in enumerate(dense_idx):
+        rrf[i] = rrf.get(i, 0.0) + 1.0 / (rrf_k + rank)
+    for rank, i in enumerate(sparse_idx):
+        rrf[i] = rrf.get(i, 0.0) + 1.0 / (rrf_k + rank)
+    fused = sorted(rrf, key=lambda i: -rrf[i])[: max(limit * 3, 40)]
+
+    # MMR 去冗余
+    selected, pool = [], list(fused)
+    while pool and len(selected) < limit:
+        if not selected:
+            best = pool[0]
+        else:
+            sel_mat = cand[selected]
+            best = max(pool, key=lambda i: mmr_lambda * float(sims[i])
+                       - (1 - mmr_lambda) * float((cand[i] @ sel_mat.T).max()))
+        selected.append(best); pool.remove(best)
+
+    now = int(time.time())
+    out = []
+    for i in selected:
+        r = rows[i]; ct = r.get("create_time") or now
+        out.append({"content": r["content"], "book_id": r["book_id"],
+                    "book_title": r["book_title"], "author": r.get("author", ""),
+                    "source_type": r["source_type"], "similarity": round(float(sims[i]), 3),
+                    "days_ago": max(0, (now - ct) // 86400), "create_time": r.get("create_time")})
+    return out
+
+
+@_quiet_fp
+def explore_search(query, limit=20, concept_floor=0.6):
+    """统一探索：一次混合检索得到划线，并把命中划线**归到各自最近的概念**来点亮图谱。
+    图谱高亮 = 右栏划线所属概念，两边同源一致；也修了"人名查询点不亮概念"。"""
+    from knowledge_base import search_content
+    np = _np()
+    src = _resolve_source()
+    model = get_primary_model()
+    fallback = {"highlights": search_content(keyword=query, limit=limit), "concepts": []}
+    if src is None or np is None or not model:
+        return fallback
+    rows = load_search_embeddings(model)
+    qv = embed_texts([query], src)
+    if not rows or not qv:
+        return fallback
+
+    q = _normalize(np, np.asarray(qv, dtype=np.float32))[0]
+    cand = _normalize(np, np.frombuffer(b"".join(r["vec"] for r in rows),
+                                        dtype=np.float32).reshape(len(rows), -1))
+    sims = cand @ q
+
+    # 混合：dense top-K + 关键词子串，RRF 融合
+    dense_idx = list(map(int, np.argsort(-sims)[:40]))
+    ql = query.strip()
+    sparse_idx = [i for i, r in enumerate(rows) if ql and ql in r["content"]][:40]
+    rrf = {}
+    for rank, i in enumerate(dense_idx):
+        rrf[i] = rrf.get(i, 0.0) + 1.0 / (60 + rank)
+    for rank, i in enumerate(sparse_idx):
+        rrf[i] = rrf.get(i, 0.0) + 1.0 / (60 + rank)
+    fused = sorted(rrf, key=lambda i: -rrf[i])[: max(limit * 3, 40)]
+
+    # MMR 去冗余
+    selected, pool = [], list(fused)
+    while pool and len(selected) < limit:
+        if not selected:
+            best = pool[0]
+        else:
+            sm = cand[selected]
+            best = max(pool, key=lambda i: 0.72 * float(sims[i])
+                       - 0.28 * float((cand[i] @ sm.T).max()))
+        selected.append(best); pool.remove(best)
+
+    now = int(time.time())
+    highlights = []
+    for i in selected:
+        r = rows[i]; ct = r.get("create_time") or now
+        highlights.append({"content": r["content"], "book_id": r["book_id"],
+                           "book_title": r["book_title"], "author": r.get("author", ""),
+                           "source_type": r["source_type"], "similarity": round(float(sims[i]), 3),
+                           "days_ago": max(0, (now - ct) // 86400), "create_time": r.get("create_time")})
+
+    # 概念高亮 = 命中划线各自最近的概念
+    # 关键词命中的划线(确实含查询词)照常归属；纯语义召回的划线要够相关(≥0.5)才参与，
+    # 避免"阿尔都塞"召回的弱划线把"债务可持续性"这种无关概念点亮
+    concepts, seen = [], set()
+    sparse_set = set(sparse_idx)
+    vtags, cmat = _concept_vectors()
+    if cmat is not None:
+        for i in selected[:14]:
+            if i not in sparse_set and float(sims[i]) < 0.5:
+                continue
+            csims = cmat @ cand[i]
+            b = int(csims.argmax())
+            if float(csims[b]) >= concept_floor and vtags[b] not in seen:
+                seen.add(vtags[b]); concepts.append(vtags[b])
+    return {"highlights": highlights, "concepts": concepts}
+
+
+def _concept_vectors(max_nodes=200):
+    """(tags, 归一化矩阵)——每个概念的"语境向量"=其支持划线向量均值。"""
+    from collections import defaultdict
+    from knowledge_base import _conn
+    np = _np()
+    model = get_primary_model()
+    if np is None or not model:
+        return [], None
+    with _conn() as c:
+        rows = c.execute("SELECT tag FROM concepts GROUP BY tag ORDER BY COUNT(*) DESC LIMIT ?",
+                         (max_nodes,)).fetchall()
+        tags = [r["tag"] for r in rows]
+        if not tags:
+            return [], None
+        ph = ",".join("?" * len(tags))
+        vr = c.execute(f"""
+            SELECT cc.tag AS tag, e.vec AS vec FROM concepts cc
+            JOIN embeddings e ON e.source_type='highlight' AND e.source_id=cc.source_id AND e.model=?
+            WHERE cc.source_type='highlight' AND cc.tag IN ({ph})
+        """, (model, *tags)).fetchall()
+    acc = defaultdict(list)
+    for r in vr:
+        acc[r["tag"]].append(np.frombuffer(r["vec"], dtype=np.float32))
+    vtags = [t for t in tags if t in acc]
+    if not vtags:
+        return [], None
+    mat = _normalize(np, np.stack([np.mean(np.stack(acc[t]), axis=0) for t in vtags]))
+    return vtags, mat
+
+
+@_quiet_fp
+def match_concepts(query, top_n=12, min_sim=0.4):
+    """语义匹配概念：概念只要**有一条划线**和查询相近就点亮（取该概念各划线
+    与查询相似度的最大值，而非均值——均值会稀释信号）。
+    这样搜"苏格拉底"能点亮挂着苏格拉底相关划线的"灵魂/真理/形相"等概念。"""
+    from collections import defaultdict
+    from knowledge_base import _conn
+    np = _np()
+    src = _resolve_source()
+    model = get_primary_model()
+    if src is None or np is None or not model:
+        return []
+    qv = embed_texts([query], src)
+    if not qv:
+        return []
+    q = _normalize(np, np.asarray(qv, dtype=np.float32))[0]
+    with _conn() as c:
+        vr = c.execute("""
+            SELECT cc.tag AS tag, e.vec AS vec FROM concepts cc
+            JOIN embeddings e ON e.source_type='highlight' AND e.source_id=cc.source_id AND e.model=?
+            WHERE cc.source_type='highlight'
+        """, (model,)).fetchall()
+    if not vr:
+        return []
+    best = defaultdict(float)
+    for r in vr:
+        v = np.frombuffer(r["vec"], dtype=np.float32)
+        nv = np.linalg.norm(v) or 1.0
+        s = float((v / nv) @ q)
+        if s > best[r["tag"]]:
+            best[r["tag"]] = s
+    ranked = sorted(best.items(), key=lambda x: -x[1])
+    return [t for t, s in ranked[:top_n] if s >= min_sim]
+
+
+@_quiet_fp
+def build_concept_graph(max_nodes=200, sim_threshold=0.70, per_node=3):
+    """概念知识图谱（语境分布式语义，可跨书、可解释）：
+      节点 = 概念，大小 = 关联划线数；
+      每个概念用**它支持划线的向量均值**作为"语境向量"（不是裸名字），
+      边 = 语境向量相似度高的概念对（每个概念取最相近 top-K 且超阈值）。
+    这样"限度(柏拉图)↔门槛(金融)"因语境不同而不连，"估值↔价值"等真正相关的
+    跨书概念才连——跨书关联来自真实划线语境，而非短名字。"""
+    from collections import defaultdict
+    from knowledge_base import _conn
+    np = _np()
+    model = get_primary_model()
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT tag, COUNT(*) AS n, COUNT(DISTINCT book_id) AS nb
+            FROM concepts GROUP BY tag ORDER BY n DESC LIMIT ?
+        """, (max_nodes,)).fetchall()
+        tags = [r["tag"] for r in rows]
+        nodes = [{"id": r["tag"], "val": int(r["n"]), "books": int(r["nb"])} for r in rows]
+        if not tags or np is None or not model:
+            return {"nodes": nodes, "links": []}
+        ph = ",".join("?" * len(tags))
+        vrows = c.execute(f"""
+            SELECT cc.tag AS tag, e.vec AS vec
+            FROM concepts cc
+            JOIN embeddings e ON e.source_type='highlight'
+                              AND e.source_id = cc.source_id AND e.model = ?
+            WHERE cc.source_type='highlight' AND cc.tag IN ({ph})
+        """, (model, *tags)).fetchall()
+
+    acc = defaultdict(list)
+    for r in vrows:
+        acc[r["tag"]].append(np.frombuffer(r["vec"], dtype=np.float32))
+    vtags = [t for t in tags if t in acc]
+    if len(vtags) < 2:
+        return {"nodes": nodes, "links": []}
+    mat = np.stack([np.mean(np.stack(acc[t]), axis=0) for t in vtags])
+    mat = _normalize(np, mat)
+    sims = mat @ mat.T
+
+    seen, links = set(), []
+    for i in range(len(vtags)):
+        order = np.argsort(-sims[i])
+        cnt = 0
+        for j in order:
+            if j == i:
+                continue
+            s = float(sims[i, j])
+            if s < sim_threshold:
+                break
+            key = (min(i, j), max(i, j))
+            if key not in seen:
+                seen.add(key)
+                links.append({"source": vtags[i], "target": vtags[j], "value": round(s, 3)})
+            cnt += 1
+            if cnt >= per_node:
+                break
+
+    # 救援：给孤立概念连上它最相近的邻居，避免一堆孤点飘着
+    linked = set()
+    for l in links:
+        linked.add(l["source"]); linked.add(l["target"])
+    for i, t in enumerate(vtags):
+        if t in linked:
+            continue
+        order = np.argsort(-sims[i])
+        for j in order:
+            if j != i:
+                links.append({"source": t, "target": vtags[j], "value": round(float(sims[i, j]), 3)})
+                break
+    return {"nodes": nodes, "links": links}
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────

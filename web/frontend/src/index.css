@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-paper text-ink;
+  font-family: theme('fontFamily.sans');
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 阅读内容（划线/批注正文）用衬线，营造"读书"质感 */
+.reading {
+  font-family: theme('fontFamily.serif');
+  letter-spacing: 0.01em;
+}
+
+/* 细滚动条 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #e0d8c8; border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }

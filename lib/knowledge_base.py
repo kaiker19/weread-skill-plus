@@ -342,6 +342,59 @@ def insert_concepts(source_type: str, source_id: str, book_id: str,
         """, [(tag.strip(), source_type, source_id, book_id, now) for tag in tags if tag.strip()])
 
 
+def get_concept_highlights(tag: str, db_path: Path = None) -> List[dict]:
+    """某概念关联的划线（跨书），供图谱点击概念时的侧栏。"""
+    with _conn(db_path) as c:
+        rows = c.execute("""
+            SELECT DISTINCT h.content, b.title AS book_title, e.book_id
+            FROM concepts e
+            JOIN highlights h ON e.source_type='highlight' AND h.highlight_id=e.source_id
+            JOIN books b ON e.book_id = b.book_id
+            WHERE e.tag = ?
+            ORDER BY b.title
+        """, (tag,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_distinct_concept_tags(db_path: Path = None) -> List[str]:
+    with _conn(db_path) as c:
+        return [r[0] for r in c.execute("SELECT DISTINCT tag FROM concepts").fetchall()]
+
+
+def get_books_needing_concepts(db_path: Path = None) -> List[dict]:
+    """有划线、但还没抽过概念的书。"""
+    with _conn(db_path) as c:
+        rows = c.execute("""
+            SELECT b.* FROM books b
+            WHERE EXISTS (SELECT 1 FROM highlights h WHERE h.book_id = b.book_id)
+              AND NOT EXISTS (SELECT 1 FROM concepts cc WHERE cc.book_id = b.book_id)
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+
+def replace_book_concepts(book_id: str, concepts: List[dict], db_path: Path = None):
+    """写入一本书的概念（先删旧、可重跑）。concepts: [{name, highlight_ids:[...]}]，
+    每个概念按其支持划线落多行 concept↔highlight；无划线则落一条 book 级。"""
+    now = int(time.time())
+    with _conn(db_path) as c:
+        c.execute("DELETE FROM concepts WHERE book_id=?", (book_id,))
+        for con in concepts:
+            name = (con.get("name") or "").strip()
+            if not name:
+                continue
+            hids = con.get("highlight_ids") or []
+            if hids:
+                c.executemany("""
+                    INSERT INTO concepts (tag, source_type, source_id, book_id, created_at)
+                    VALUES (?, 'highlight', ?, ?, ?)
+                """, [(name, h, book_id, now) for h in hids])
+            else:
+                c.execute("""
+                    INSERT INTO concepts (tag, source_type, source_id, book_id, created_at)
+                    VALUES (?, 'book', ?, ?, ?)
+                """, (name, book_id, book_id, now))
+
+
 def find_related_by_concepts(tags: List[str], exclude_book_id: str = None,
                               limit: int = 5, db_path: Path = None) -> List[dict]:
     """Find highlights/reviews from other books that share concept tags.
