@@ -6,3 +6,8 @@ progress.txt
 ROADMAP.md
 prompts/samples.md
 web/docs/
+
+# 打包产物（PyInstaller 输出，150MB+，绝不进仓库；二进制走 Releases 附件）
+/dist/
+/build/
+*.spec.bak
