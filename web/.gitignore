@@ -3,4 +3,7 @@ dist/
 *.log
 .vite/
 docs/
-standalone/
+# standalone 源码现在要随仓库发布（打包/CI 需要）；只忽略内置模型(91M)和测试痕迹
+standalone/_model/
+standalone/__pycache__/
+standalone/_smoke.py

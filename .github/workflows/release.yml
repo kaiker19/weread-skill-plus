@@ -1,0 +1,54 @@
+# 跨平台打包 CI —— 推送 v* tag 时，macOS / Windows 各跑一次 PyInstaller，把产物挂到 Release。
+# Linux 押后（v1 目标人群基本是 Mac/Win）。未签名，下载页需配「如何放行」说明。
+
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write          # 创建 Release 需要
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            pack: dmg
+          - os: windows-latest
+            pack: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: 构建前端
+        run: cd web/frontend && npm ci && npm run build
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: 安装依赖
+        run: |
+          pip install -r web/requirements.txt
+          pip install jieba fastembed pyinstaller
+      - name: 下载并内置语义模型（美区 runner 可访问 HuggingFace）
+        run: python web/standalone/fetch_model.py
+      - name: PyInstaller 打包
+        run: pyinstaller web/standalone/weread-dashboard.spec --noconfirm --clean
+
+      - name: 打 .dmg (macOS)
+        if: matrix.pack == 'dmg'
+        run: hdiutil create -volname "WeRead Dashboard" -srcfolder "dist/WeRead Dashboard.app" -ov -format UDZO "dist/WeReadDashboard-macos.dmg"
+      - name: 打 zip (Windows)
+        if: matrix.pack == 'zip'
+        run: Compress-Archive -Path dist/WeReadDashboard/* -DestinationPath dist/WeReadDashboard-windows.zip
+
+      - name: 挂到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.dmg
+            dist/*.zip

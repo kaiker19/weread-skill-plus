@@ -11,7 +11,7 @@ function PassageCard({ item }) {
   const isReview = item.source_type === 'review'
   const simPct = item.similarity != null ? Math.round(item.similarity * 100) : null
   return (
-    <div className="bg-surface rounded-xl border border-line px-4 py-3">
+    <div className="bg-surface rounded-xl border border-line shadow-card px-4 py-3">
       <p className="reading text-[13.5px] text-ink leading-[1.8]">{item.content}</p>
       <div className="flex flex-wrap items-center gap-2 mt-2">
         <span className={`inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded ${

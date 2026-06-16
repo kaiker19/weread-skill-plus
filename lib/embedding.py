@@ -22,6 +22,7 @@ CLI:
 """
 
 import json
+import os
 import random
 import subprocess
 import sys
@@ -70,7 +71,8 @@ def _np():
 
 def _load_api_config():
     """data/embedding.json → {endpoint, api_key, model}. Returns dict or None."""
-    p = ROOT / "data" / "embedding.json"
+    from knowledge_base import data_dir
+    p = data_dir() / "embedding.json"
     if not p.exists():
         return None
     try:
@@ -118,7 +120,9 @@ def _resolve_source(verbose=False):
             if verbose:
                 print("[embedding] fastembed 无可用多语言模型", file=sys.stderr)
             return None
-        model = TextEmbedding(model_name=name)
+        # 打包版用持久缓存目录（FASTEMBED_CACHE_DIR），避免临时目录重启被清、反复重下模型
+        _cache = os.environ.get("FASTEMBED_CACHE_DIR")
+        model = TextEmbedding(model_name=name, cache_dir=_cache) if _cache else TextEmbedding(model_name=name)
         _source_cache = {"kind": "local", "model": name, "handle": model}
         if verbose:
             print(f"[embedding] 源: 本地 fastembed (model={name})")
@@ -176,7 +180,7 @@ def embed_texts(texts, src=None):
 
 # ── Backfill / incremental ───────────────────────────────────────────────────
 
-def embed_records(records, src=None, verbose=False):
+def embed_records(records, src=None, verbose=False, progress=None):
     """Embed and store a list of source rows.
 
     Each record: {source_type, source_id, content, book_id}.
@@ -201,11 +205,17 @@ def embed_records(records, src=None, verbose=False):
             done += 1
         if verbose:
             print(f"  embedded {done}/{len(records)}", file=sys.stderr)
+        if progress:
+            try:
+                progress(done, len(records))
+            except Exception:
+                pass
     return done
 
 
-def backfill(limit=None, verbose=True):
-    """Embed all (or up to `limit`) records lacking a vector for the active model."""
+def backfill(limit=None, verbose=True, progress=None):
+    """Embed all (or up to `limit`) records lacking a vector for the active model.
+    progress(done, total) 每批回调一次，供 UI 展示建索引进度。"""
     init_db()
     src = _resolve_source(verbose=verbose)
     if src is None:
@@ -222,7 +232,7 @@ def backfill(limit=None, verbose=True):
     if not pending:
         return 0
     t0 = time.time()
-    n = embed_records(pending, src=src, verbose=verbose)
+    n = embed_records(pending, src=src, verbose=verbose, progress=progress)
     if verbose:
         print(f"[embedding] 完成 {n} 条，用时 {time.time()-t0:.1f}s")
     return n

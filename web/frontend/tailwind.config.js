@@ -18,7 +18,12 @@ export default {
           DEFAULT: '#1B88EE',    // 微信读书蓝
           ink: '#1670C9',
           soft: '#EAF4FE',       // 蓝色浅底
+          tint: 'rgba(27,136,238,0.06)',  // 图标底片（weread 官网风格）
         },
+      },
+      backgroundImage: {
+        // weread 官网标志性渐变 CTA
+        'clay-grad': 'linear-gradient(90deg, #0087FC 0%, #28B7FF 100%)',
       },
       fontFamily: {
         sans: ['-apple-system', 'BlinkMacSystemFont', 'PingFang SC',
@@ -27,6 +32,7 @@ export default {
       },
       boxShadow: {
         card: '0px 4px 60px rgba(0, 0, 0, 0.04)',  // 微信读书卡片的极柔阴影
+        airy: '0px 0px 80px rgba(0, 0, 0, 0.04)',  // weread 官网大半径柔光
       },
     },
   },

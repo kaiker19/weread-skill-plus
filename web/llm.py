@@ -16,13 +16,15 @@ format（默认 openai）一种即覆盖绝大多数（OpenAI / DeepSeek / Kimi 
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 
 
 def _load_config():
-    p = ROOT / "data" / "llm.json"
+    from knowledge_base import data_dir   # 懒导入：被 server 调用时 lib 已在 path
+    p = data_dir() / "llm.json"
     if not p.exists():
         return None
     try:
@@ -67,15 +69,6 @@ def chat(system: str, user: str, max_tokens: int = 1500):
             raise RuntimeError(f"anthropic 返回异常: {str(data)[:200]}")
         return data["content"][0]["text"]
 
-    if fmt == "gemini":
-        url = cfg["endpoint"]
-        url += ("&" if "?" in url else "?") + f"key={cfg['api_key']}"
-        data = _post(url, {},
-                     {"contents": [{"parts": [{"text": system + "\n\n" + user}]}]})
-        if "candidates" not in data:
-            raise RuntimeError(f"gemini 返回异常: {str(data)[:200]}")
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-
     # openai 兼容（默认）
     data = _post(cfg["endpoint"],
                  {"Authorization": f"Bearer {cfg['api_key']}"},
@@ -88,7 +81,9 @@ def chat(system: str, user: str, max_tokens: int = 1500):
 
 
 def _read_prompt(name: str) -> str:
-    return (ROOT / "prompts" / name).read_text()
+    # 打包后 prompts 在 _MEIPASS/prompts；开发态在项目根 prompts/
+    base = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else ROOT
+    return (base / "prompts" / name).read_text()
 
 
 def summarize_book(payload: dict):

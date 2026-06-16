@@ -1,11 +1,22 @@
+// 包一层 fetch：localhost 下的网络失败 = 后端服务没了（应用已关/离开太久被回收）。
+// 广播事件让 App 弹"请重新打开应用"，而不是把生硬的 Failed to fetch 抛给用户。
+async function _fetch(path, opts) {
+  try {
+    return await fetch(path, opts)
+  } catch (e) {
+    try { window.dispatchEvent(new Event('weread-backend-down')) } catch {}
+    throw e
+  }
+}
+
 async function get(path) {
-  const res = await fetch(path)
+  const res = await _fetch(path)
   if (!res.ok) throw new Error(`${res.status} ${path}`)
   return res.json()
 }
 
 async function post(path) {
-  const res = await fetch(path, { method: 'POST' })
+  const res = await _fetch(path, { method: 'POST' })
   if (!res.ok) {
     let detail = `${res.status}`
     try { detail = (await res.json()).detail || detail } catch {}
@@ -34,17 +45,25 @@ export const api = {
   getLlmSettings: () => get('/api/settings/llm'),
   saveLlmSettings: (cfg) => postJson('/api/settings/llm', cfg),
   sync: () => post('/api/sync'),
-  backfillStart:  (kind) => post(`/api/backfill/start?kind=${kind}`),
+  backfillStart:  (kind, force=false) => post(`/api/backfill/start?kind=${kind}&force=${force}`),
+  extractBookConcepts: (id) => post(`/api/books/${id}/concepts`),
   backfillStop:   ()     => post('/api/backfill/stop'),
   backfillStatus: ()     => get('/api/backfill/status'),
   backfillPending: ()    => get('/api/backfill/pending'),
   graph:        ()    => get('/api/graph'),
   graphConcept: (tag) => get(`/api/graph/concept/${encodeURIComponent(tag)}`),
   explore:      (q, limit=20) => get(`/api/explore?q=${encodeURIComponent(q)}&limit=${limit}`),
+  // 首启向导（仅 standalone 版 setup_api 提供；dev/agent 版无此路由 → 调用方按 404 当已配置处理）
+  apikeyStatus:  () => get('/api/settings/apikey'),
+  saveApikey:    (key) => postJson('/api/settings/apikey', { api_key: key }),
+  fullSyncStart: () => post('/api/sync/full/start'),
+  fullSyncStatus:() => get('/api/sync/full/status'),
+  shutdown:      () => post('/api/shutdown'),
+  heartbeat:     () => post('/api/heartbeat'),
 }
 
 async function postJson(path, body) {
-  const res = await fetch(path, {
+  const res = await _fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

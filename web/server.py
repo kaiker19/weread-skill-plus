@@ -168,7 +168,8 @@ class LLMSettings(BaseModel):
     format: str = "openai"
 
 
-_LLM_CFG = Path(__file__).parent.parent / "data" / "llm.json"
+from knowledge_base import data_dir
+_LLM_CFG = data_dir() / "llm.json"
 
 
 @app.get("/api/settings/llm")
@@ -193,9 +194,18 @@ def get_llm_settings():
 def save_llm_settings(s: LLMSettings):
     """保存到 data/llm.json 并测试一次连通性。"""
     import json
+    existing = {}
+    if _LLM_CFG.exists():
+        try:
+            existing = json.loads(_LLM_CFG.read_text())
+        except Exception:
+            existing = {}
+    # api_key 留空 = 不修改，沿用已存的（兑现 UI「已保存，留空则不修改」的承诺，
+    # 避免把空 key 写坏配置导致测试失败）
+    api_key = s.api_key.strip() or existing.get("api_key", "")
     _LLM_CFG.parent.mkdir(parents=True, exist_ok=True)
     _LLM_CFG.write_text(json.dumps({
-        "endpoint": s.endpoint.strip(), "api_key": s.api_key.strip(),
+        "endpoint": s.endpoint.strip(), "api_key": api_key,
         "model": s.model.strip(), "format": s.format.strip() or "openai",
     }, ensure_ascii=False))
     try:
@@ -212,7 +222,7 @@ import threading
 _job = {"running": False, "kind": None, "total": 0, "done": 0, "ok": 0, "fail": 0, "current": ""}
 
 
-def _run_backfill(kind: str):
+def _run_backfill(kind: str, force: bool = False):
     global _job
     sys.path.insert(0, str(Path(__file__).parent.parent / "book_summary"))
     try:
@@ -220,7 +230,7 @@ def _run_backfill(kind: str):
             from book_summary import build_payload
             from knowledge_base import get_books_needing_summary, save_summary
             from llm import summarize_book
-            books = get_books_needing_summary()
+            books = get_books_needing_summary(include_done=force)
             _job.update(total=len(books), done=0, ok=0, fail=0)
             for b in books:
                 if not _job["running"]:
@@ -239,7 +249,7 @@ def _run_backfill(kind: str):
             from knowledge_base import (get_books_needing_concepts, get_highlights_for_book,
                                         get_distinct_concept_tags, replace_book_concepts)
             from llm import extract_concepts
-            books = get_books_needing_concepts()
+            books = get_books_needing_concepts(include_done=force)
             _job.update(total=len(books), done=0, ok=0, fail=0)
             for b in books:
                 if not _job["running"]:
@@ -261,7 +271,7 @@ def _run_backfill(kind: str):
 
 
 @app.post("/api/backfill/start")
-def backfill_start(kind: str = "summaries"):
+def backfill_start(kind: str = "summaries", force: bool = False):
     if _job["running"]:
         raise HTTPException(status_code=409, detail="已有批量任务在运行")
     if kind not in ("summaries", "concepts"):
@@ -269,8 +279,9 @@ def backfill_start(kind: str = "summaries"):
     from llm import llm_available
     if not llm_available():
         raise HTTPException(status_code=409, detail="未配置 LLM，先去设置配置")
+    # force=True 连已生成过的也重跑（换模型重抽/重生成）
     _job.update(running=True, kind=kind, total=0, done=0, ok=0, fail=0, current="启动中…")
-    threading.Thread(target=_run_backfill, args=(kind,), daemon=True).start()
+    threading.Thread(target=_run_backfill, args=(kind, force), daemon=True).start()
     return {"started": True}
 
 
@@ -373,6 +384,28 @@ def summarize_book_endpoint(book_id: str, force: bool = False):
     return {"summary": text, "regenerated": True}
 
 
+@app.post("/api/books/{book_id}/concepts")
+def extract_book_concepts_endpoint(book_id: str):
+    """对单本书抽取/重抽概念（换模型后就地重来）。replace_book_concepts 覆盖语义，总是重写。"""
+    try:
+        from llm import llm_available, extract_concepts
+    except Exception:
+        raise HTTPException(status_code=409, detail="LLM 模块不可用")
+    if not llm_available():
+        raise HTTPException(status_code=409, detail="未配置 LLM，先去设置配置")
+    from knowledge_base import (get_highlights_for_book, get_distinct_concept_tags,
+                                replace_book_concepts)
+    book = get_book(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    cons = extract_concepts(book["title"], get_highlights_for_book(book_id),
+                            get_distinct_concept_tags())
+    if cons is None:
+        raise HTTPException(status_code=500, detail="LLM 未返回内容")
+    replace_book_concepts(book_id, cons)
+    return {"ok": True, "count": len(cons)}
+
+
 # ── Timeline & categories ─────────────────────────────────────────────────
 
 @app.get("/api/timeline")
@@ -457,10 +490,14 @@ def get_echoes(q: str = Query(..., min_length=1), limit: int = 10):
 
 @app.get("/api/insight/connections")
 def insight_connections(limit: int = 3):
-    """锚定最近阅读的跨书连接(对照对)。无向量时返回 []。"""
+    """锚定最近阅读的跨书连接(对照对)。无向量时返回 []。
+    网页是浏览/发现场景：放宽锚点范围(anchor_n)、略降阈值，让连接更丰富、「换一批」有料可换；
+    agent 每日回声仍走 cross_book_connections 的严格默认。"""
     try:
         from embedding import cross_book_connections
-        return cross_book_connections(limit=limit)
+        # 0.70：实测"债务↔资本/财富/消费"这类明显相关的跨书呼应落在 0.70~0.72，
+        # 0.72 会把它们挡掉、导致"今天读了书呼应却不更新"。0.70 仍足够相关。
+        return cross_book_connections(limit=limit, anchor_n=80, min_sim=0.70)
     except Exception:
         return []
 

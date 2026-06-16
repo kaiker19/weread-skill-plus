@@ -28,11 +28,21 @@ _SKILL_ROOT = Path(__file__).parent.parent  # lib/ → project root
 DEFAULT_DB_PATH = _SKILL_ROOT / "data" / "knowledge.db"
 
 
+def data_dir() -> Path:
+    """数据目录的单一来源：key / 配置 / db 全走这里。
+    WEREAD_DATA_DIR 环境变量优先——打包后由 launcher 落到 ~/.weread-skill-plus/
+    （Path.home() 跨 Mac/Win 通用）；未设则项目根 data/，普通用法行为不变。"""
+    env = os.environ.get("WEREAD_DATA_DIR")
+    d = Path(env).expanduser() if env else _SKILL_ROOT / "data"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def get_db_path() -> Path:
     env = os.environ.get("WEREAD_KB_PATH")
     if env:
-        return Path(env)
-    return DEFAULT_DB_PATH
+        return Path(env).expanduser()
+    return data_dir() / "knowledge.db"
 
 
 @contextmanager
@@ -88,6 +98,7 @@ CREATE TABLE IF NOT EXISTS reviews (
     review_id     TEXT PRIMARY KEY,
     book_id       TEXT NOT NULL REFERENCES books(book_id),
     content       TEXT NOT NULL,
+    abstract      TEXT NOT NULL DEFAULT '',
     chapter_uid   INTEGER,
     range_val     TEXT NOT NULL DEFAULT '',
     create_time   INTEGER,
@@ -140,6 +151,12 @@ def init_db(db_path: Path = None):
     """Create all tables and indexes if they don't exist."""
     with _conn(db_path) as c:
         c.executescript(_SCHEMA)
+        # 迁移：老库 reviews 表补 abstract 列（批注对应的划线原文）。幂等。
+        cols = [r[1] for r in c.execute("PRAGMA table_info(reviews)").fetchall()]
+        if "abstract" not in cols:
+            c.execute("ALTER TABLE reviews ADD COLUMN abstract TEXT NOT NULL DEFAULT ''")
+            # 清空 review 增量游标：下次同步会重新拉取所有批注以回填 abstract
+            c.execute("DELETE FROM sync_state WHERE key LIKE 'review_synckey_%'")
 
 
 # ── Books ──────────────────────────────────────────────────────────────────
@@ -267,19 +284,29 @@ def insert_review(r: dict, db_path: Path = None) -> bool:
     with _conn(db_path) as c:
         cur = c.execute("""
             INSERT OR IGNORE INTO reviews
-              (review_id, book_id, content, chapter_uid, range_val,
+              (review_id, book_id, content, abstract, chapter_uid, range_val,
                create_time, synced_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             r["review_id"],
             r["book_id"],
             r["content"],
+            r.get("abstract", ""),
             r.get("chapter_uid"),
             r.get("range_val", ""),
             r.get("create_time"),
             int(time.time()),
         ))
         return cur.rowcount > 0
+
+
+def update_review_abstract(review_id: str, abstract: str, db_path: Path = None) -> None:
+    """回填已存在批注的划线原文（仅当原值为空时写入），用于老数据补 abstract。"""
+    if not abstract:
+        return
+    with _conn(db_path) as c:
+        c.execute("UPDATE reviews SET abstract=? WHERE review_id=? AND abstract=''",
+                  (abstract, review_id))
 
 
 def get_reviews_since(since_ts: int, db_path: Path = None) -> List[dict]:
@@ -361,14 +388,13 @@ def get_distinct_concept_tags(db_path: Path = None) -> List[str]:
         return [r[0] for r in c.execute("SELECT DISTINCT tag FROM concepts").fetchall()]
 
 
-def get_books_needing_concepts(db_path: Path = None) -> List[dict]:
-    """有划线、但还没抽过概念的书。"""
+def get_books_needing_concepts(db_path: Path = None, include_done: bool = False) -> List[dict]:
+    """有划线的书。include_done=False 只返回还没抽过概念的；True 返回全部（换模型重抽用）。"""
+    cond = "EXISTS (SELECT 1 FROM highlights h WHERE h.book_id = b.book_id)"
+    if not include_done:
+        cond += " AND NOT EXISTS (SELECT 1 FROM concepts cc WHERE cc.book_id = b.book_id)"
     with _conn(db_path) as c:
-        rows = c.execute("""
-            SELECT b.* FROM books b
-            WHERE EXISTS (SELECT 1 FROM highlights h WHERE h.book_id = b.book_id)
-              AND NOT EXISTS (SELECT 1 FROM concepts cc WHERE cc.book_id = b.book_id)
-        """).fetchall()
+        rows = c.execute(f"SELECT b.* FROM books b WHERE {cond}").fetchall()
         return [dict(r) for r in rows]
 
 
@@ -550,20 +576,17 @@ def get_latest_summary(summary_type: str, book_id: str = None,
         return dict(row) if row else None
 
 
-def get_books_needing_summary(db_path: Path = None) -> List[dict]:
-    """读完或有划线、且尚无真实读后总结的书（批量回填用）。"""
+def get_books_needing_summary(db_path: Path = None, include_done: bool = False) -> List[dict]:
+    """读完的书。include_done=False 只返回尚无真实总结的；True 返回全部（换模型重生成用）。
+    「读后总结」顾名思义只对读完的书；在读的书（仅有划线）不计入。"""
+    cond = "b.finish_time IS NOT NULL"
+    if not include_done:
+        cond += (" AND NOT EXISTS (SELECT 1 FROM summaries s WHERE s.summary_type='book_completion'"
+                 " AND s.book_id=b.book_id AND s.content NOT LIKE '[pending%')")
     with _conn(db_path) as c:
-        rows = c.execute("""
-            SELECT b.* FROM books b
-            WHERE (b.finish_time IS NOT NULL
-                   OR EXISTS (SELECT 1 FROM highlights h WHERE h.book_id = b.book_id))
-              AND NOT EXISTS (
-                  SELECT 1 FROM summaries s
-                  WHERE s.summary_type = 'book_completion'
-                    AND s.book_id = b.book_id
-                    AND s.content NOT LIKE '[pending%')
-            ORDER BY b.finish_time DESC NULLS LAST, b.last_read_time DESC
-        """).fetchall()
+        rows = c.execute(
+            f"SELECT b.* FROM books b WHERE {cond} "
+            "ORDER BY b.finish_time DESC NULLS LAST, b.last_read_time DESC").fetchall()
         return [dict(r) for r in rows]
 
 

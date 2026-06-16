@@ -57,7 +57,7 @@ function DigestCard({ summary, representative, reviewCount, canGenerate, onGener
   }
 
   return (
-    <div className="bg-surface rounded-2xl border border-line p-6 mb-6">
+    <div className="bg-surface rounded-2xl border border-line shadow-card p-6 mb-6">
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-sm font-medium text-clay-ink flex items-center gap-1.5">
           <Sparkles className="w-4 h-4" /> {hasSummary ? '读后总结' : '速览'}
@@ -72,7 +72,7 @@ function DigestCard({ summary, representative, reviewCount, canGenerate, onGener
               <button onClick={onGenerate} disabled={generating}
                 className="flex items-center gap-1 text-xs text-ink-faint hover:text-clay disabled:opacity-40">
                 <RefreshCw className={`w-3 h-3 ${generating ? 'animate-spin' : ''}`} />
-                {generating ? '生成中…' : hasSummary ? '重新生成' : '生成总结'}
+                {generating ? '生成中…' : hasSummary ? 'AI 重新生成' : 'AI 生成总结'}
               </button>
             ) : !hasSummary && (
               <Link to="/settings" className="text-xs text-ink-faint hover:text-clay">
@@ -94,7 +94,7 @@ function DigestCard({ summary, representative, reviewCount, canGenerate, onGener
           />
           <div className="flex items-center gap-2 mt-2">
             <button onClick={save} disabled={saving || !draft.trim()}
-              className="text-xs px-3 py-1.5 rounded-lg bg-clay text-white hover:bg-clay-ink disabled:opacity-40">
+              className="text-xs px-3 py-1.5 rounded-lg bg-clay-grad text-white shadow-sm hover:opacity-95 disabled:opacity-40">
               {saving ? '保存中…' : '保存'}
             </button>
             <button onClick={() => setEditing(false)}
@@ -161,7 +161,7 @@ export default function BookDetail() {
       </Link>
 
       {/* Book header — 封面 + 信息 */}
-      <div className="bg-surface rounded-2xl border border-line p-6 mb-6 flex gap-5">
+      <div className="bg-surface rounded-2xl border border-line shadow-card p-6 mb-6 flex gap-5">
         {book.cover ? (
           <img src={book.cover} alt={book.title}
             className="w-[72px] h-[102px] object-cover rounded-md border border-line flex-shrink-0" />
@@ -219,7 +219,7 @@ export default function BookDetail() {
                 <div className="space-y-3">
                   {items.map(h => (
                     <div key={h.highlight_id}
-                      className="bg-surface rounded-xl border border-line border-l-[3px] border-l-clay/40 px-5 py-4">
+                      className="bg-surface rounded-xl border border-line shadow-card border-l-[3px] border-l-clay/40 px-5 py-4">
                       <p className="reading text-[15px] text-ink leading-[1.85]">{h.content}</p>
                       {h.create_time && (
                         <p className="text-xs text-ink-faint mt-2.5">{fmtDate(h.create_time)}</p>
@@ -240,7 +240,12 @@ export default function BookDetail() {
         reviews.length > 0 ? (
           <div className="space-y-4">
             {reviews.map(r => (
-              <div key={r.review_id} className="bg-surface rounded-xl border border-line px-5 py-4">
+              <div key={r.review_id} className="bg-surface rounded-xl border border-line shadow-card px-5 py-4">
+                {r.abstract && (
+                  <p className="reading text-[13px] text-ink-soft leading-[1.7] border-l-2 border-clay/30 pl-3 mb-2.5">
+                    {r.abstract}
+                  </p>
+                )}
                 <p className="reading text-[15px] text-ink leading-[1.85]">{r.content}</p>
                 {r.create_time && (
                   <p className="text-xs text-ink-faint mt-3">{fmtDate(r.create_time)}</p>

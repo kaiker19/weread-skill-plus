@@ -21,7 +21,7 @@ function SurfaceCard({ item, onInsert }) {
   const pct = item.similarity != null ? Math.round(item.similarity * 100) : null
   return (
     <button onClick={() => onInsert(item)}
-      className="group w-full text-left bg-surface rounded-xl border border-line px-3.5 py-3 hover:border-clay/50 hover:shadow-sm transition">
+      className="group w-full text-left bg-surface rounded-xl border border-line shadow-card px-3.5 py-3 hover:border-clay/50 hover:shadow-sm transition">
       <p className="reading text-[13px] text-ink leading-[1.75] line-clamp-4">{item.content}</p>
       <div className="flex items-center gap-2 mt-2">
         <span className={`inline-flex items-center gap-1 text-[10.5px] px-1.5 py-0.5 rounded whitespace-nowrap shrink-0 ${

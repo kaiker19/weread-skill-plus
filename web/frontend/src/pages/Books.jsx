@@ -23,7 +23,7 @@ function BookCard({ book }) {
 
   return (
     <Link to={`/books/${book.book_id}`}
-      className="bg-surface rounded-2xl border border-line p-4 hover:shadow-md hover:border-clay/20 transition-all block">
+      className="bg-surface rounded-2xl border border-line shadow-card p-4 hover:shadow-md hover:border-clay/20 transition-all block">
       <div className="flex gap-3.5">
         {book.cover ? (
           <img src={book.cover} alt={book.title}

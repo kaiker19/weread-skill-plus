@@ -120,21 +120,32 @@ export default function ConceptGraph({ highlightIds = new Set(), onSelect, selec
   const onNode = (n) => onSelect && onSelect(n.id)
   const genConcepts = () =>
     api.backfillStart('concepts').then(() => api.backfillStatus().then(setJob)).catch(e => alert(e.message))
+  const genConceptsForce = () => {
+    if (!window.confirm('重抽全部会用当前设置里的模型，覆盖已有概念。继续？')) return
+    api.backfillStart('concepts', true).then(() => api.backfillStatus().then(setJob)).catch(e => alert(e.message))
+  }
 
   return (
     <div>
-      {pending.concepts > 0 && (job?.running && job.kind === 'concepts' ? (
+      {job?.running && job.kind === 'concepts' ? (
         <div className="mb-3 text-xs text-ink-soft">抽取概念中 {job.done}/{job.total}… 完成后刷新看更完整的图谱</div>
-      ) : caps.llm ? (
-        <div className="mb-3 text-xs text-ink-soft">
-          还有 {pending.concepts} 本未抽概念，图谱不完整 ·
-          <button onClick={genConcepts} className="text-clay hover:text-clay-ink font-medium ml-1">生成概念图谱</button>
+      ) : (pending.concepts > 0 || (caps.llm && data.nodes.length > 0)) ? (
+        <div className="mb-3 text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
+          {pending.concepts > 0 && (caps.llm ? (
+            <span className="text-ink-soft">还有 {pending.concepts} 本书没抽概念，图谱还不完整。
+              <button onClick={genConcepts} className="text-clay hover:text-clay-ink font-medium underline underline-offset-2 ml-1">点此一键抽取 →</button>
+            </span>
+          ) : (
+            <Link to="/settings" className="text-clay hover:text-clay-ink">配置 AI 可生成完整图谱 · 去设置</Link>
+          ))}
+          {pending.concepts === 0 && caps.llm && data.nodes.length > 0 && (
+            <button onClick={genConceptsForce} title="换模型后重新抽取全部概念（覆盖已有）"
+              className="text-ink-faint hover:text-clay">重抽全部概念</button>
+          )}
         </div>
-      ) : (
-        <div className="mb-3 text-xs"><Link to="/settings" className="text-clay hover:text-clay-ink">配置 AI 可生成完整图谱 · 去设置</Link></div>
-      ))}
+      ) : null}
 
-      <div ref={wrapRef} className="bg-surface rounded-2xl border border-line overflow-hidden">
+      <div ref={wrapRef} className="bg-surface rounded-2xl border border-line shadow-card overflow-hidden">
         {loading ? (
           <div className="p-10 text-sm text-ink-faint">加载中…</div>
         ) : data.nodes.length === 0 ? (

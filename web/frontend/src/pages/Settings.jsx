@@ -6,13 +6,16 @@ import { api } from '../api'
 const FORMATS = [
   { key: 'openai',    label: 'OpenAI 兼容（DeepSeek/智谱/通义/Kimi/Ollama…）' },
   { key: 'anthropic', label: 'Anthropic（Claude）' },
-  { key: 'gemini',    label: 'Gemini' },
 ]
 
 const PLACEHOLDER = {
   openai:    'https://api.deepseek.com/v1/chat/completions',
   anthropic: 'https://api.anthropic.com/v1/messages',
-  gemini:    'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent',
+}
+
+const MODEL_PLACEHOLDER = {
+  openai:    'deepseek-ai/DeepSeek-V3.2',
+  anthropic: 'claude-sonnet-4-5',
 }
 
 export default function Settings() {
@@ -49,7 +52,7 @@ export default function Settings() {
       </p>
 
       <h2 className="text-sm font-medium text-ink mb-3">LLM 配置</h2>
-      <div className="bg-surface rounded-2xl border border-line p-6 space-y-4">
+      <div className="bg-surface rounded-2xl border border-line shadow-card p-6 space-y-4">
         <div className="flex items-center gap-2 text-sm">
           <span className="text-ink-soft">当前状态：</span>
           {configured
@@ -72,7 +75,7 @@ export default function Settings() {
 
         <div>
           <label className="block text-xs text-ink-soft mb-1">模型</label>
-          <input className={field} placeholder="deepseek-ai/DeepSeek-V3.2"
+          <input className={field} placeholder={MODEL_PLACEHOLDER[cfg.format]}
             value={cfg.model} onChange={e => setCfg({ ...cfg, model: e.target.value })} />
         </div>
 
@@ -85,7 +88,7 @@ export default function Settings() {
         </div>
 
         <button onClick={save} disabled={saving || !cfg.endpoint || !cfg.model || (!cfg.api_key && !configured)}
-          className="px-4 py-2 text-sm bg-clay text-white rounded-lg hover:bg-clay-ink disabled:opacity-40 transition-colors">
+          className="px-4 py-2 text-sm bg-clay-grad text-white rounded-lg shadow-sm hover:opacity-95 disabled:opacity-40 transition-opacity">
           {saving ? '保存并测试中…' : '保存并测试连接'}
         </button>
 

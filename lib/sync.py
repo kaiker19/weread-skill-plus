@@ -39,9 +39,10 @@ SKILL_VERSION = "1.0.3"
 # ── API helpers ────────────────────────────────────────────────────────────
 
 def _load_api_key():
+    from knowledge_base import data_dir
     root = Path(__file__).parent.parent
-    # 1. data/api_key 文件（推荐，最稳定）
-    key_file = root / "data" / "api_key"
+    # 1. data/api_key 文件（推荐，最稳定）—— 打包后落用户目录，与向导写入同源
+    key_file = data_dir() / "api_key"
     if key_file.exists():
         val = key_file.read_text().strip()
         if val:
@@ -164,12 +165,17 @@ def sync_reviews_for_book(book_id):
                 "review_id":  rv.get("reviewId", ""),
                 "book_id":    book_id,
                 "content":    content,
+                "abstract":   (rv.get("abstract") or "").strip(),
                 "chapter_uid": rv.get("chapterUid"),
                 "range_val":  rv.get("range", ""),
                 "create_time": rv.get("createTime"),
             }
-            if r["review_id"] and insert_review(r):
+            if not r["review_id"]:
+                continue
+            if insert_review(r):
                 new_count += 1
+            elif r["abstract"]:
+                update_review_abstract(r["review_id"], r["abstract"])
 
         new_synckey = data.get("synckey", synckey)
         has_more = data.get("hasMore", 0)

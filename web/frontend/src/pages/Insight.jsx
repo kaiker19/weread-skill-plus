@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { RefreshCw } from 'lucide-react'
 import { api, daysAgo, fmtDate } from '../api'
@@ -13,7 +13,7 @@ function todayLabel() {
 function ConnectionCard({ pair }) {
   const { anchor, echo, similarity } = pair
   return (
-    <div className="bg-surface rounded-2xl border border-line p-7">
+    <div className="bg-surface rounded-2xl border border-line shadow-card p-7">
       <Quote item={anchor} note={anchor.days_ago === 0 ? '今天划' : `${anchor.days_ago} 天前划`} />
       <div className="flex items-center gap-3 my-5 text-clay">
         <span className="h-px flex-1 bg-line" />
@@ -43,7 +43,7 @@ function Quote({ item, note }) {
 /* 每日重读卡 */
 function RereadCard({ item }) {
   return (
-    <div className="bg-surface rounded-2xl border border-line p-6 h-full">
+    <div className="bg-surface rounded-2xl border border-line shadow-card p-6 h-full">
       <h2 className="text-xs font-medium text-clay/80 tracking-wide mb-3">重读</h2>
       <p className="reading text-[15px] text-ink leading-[1.85]">{item.content}</p>
       <Link to={`/books/${item.book_id}`}
@@ -60,7 +60,7 @@ function RereadCard({ item }) {
 /* 最近主题 */
 function ThemesCard({ themes }) {
   return (
-    <div className="bg-surface rounded-2xl border border-line p-6 h-full">
+    <div className="bg-surface rounded-2xl border border-line shadow-card p-6 h-full">
       <h2 className="text-xs font-medium text-clay/80 tracking-wide mb-1">最近在想</h2>
       <p className="text-[11px] text-ink-faint mb-3">按语义把近 30 天的划线聚成几簇，代表句如下（概念命名待后续）</p>
       <ul className="space-y-3">
@@ -84,7 +84,8 @@ function EmptyHint({ children }) {
 
 export default function Insight() {
   const [stats, setStats] = useState(null)
-  const [conns, setConns] = useState([])
+  const [allConns, setAllConns] = useState([])   // 整池强连接，前端轮转显示
+  const [offset, setOffset] = useState(0)
   const [reread, setReread] = useState(null)
   const [themes, setThemes] = useState([])
   const [loading, setLoading] = useState(true)
@@ -92,10 +93,10 @@ export default function Insight() {
 
   const load = () => Promise.all([
     api.stats(),
-    api.insight.connections(3),
+    api.insight.connections(8),   // 取回整池：都 ≥ 阈值（相关性有保证），前端轮转
     api.insight.reread(),
     api.insight.themes(),
-  ]).then(([s, c, r, t]) => { setStats(s); setConns(c); setReread(r); setThemes(t) })
+  ]).then(([s, c, r, t]) => { setStats(s); setAllConns(c); setOffset(0); setReread(r); setThemes(t) })
 
   useEffect(() => { load().finally(() => setLoading(false)) }, [])
 
@@ -107,17 +108,27 @@ export default function Insight() {
       .finally(() => setSyncing(false))
   }
 
-  const [shuffling, setShuffling] = useState(false)
-  const shuffle = () => {
-    setShuffling(true)
-    api.insight.connections(3)
-      .then(setConns)
-      .finally(() => setShuffling(false))
-  }
+  // 打开应用时，若上次同步距今超过 12 小时，自动增量同步一次（拉今天新读的 + 嵌入 + 刷新呼应）
+  const autoSynced = useRef(false)
+  useEffect(() => {
+    if (autoSynced.current || syncing || !stats?.last_sync_ts) return
+    if (Date.now() / 1000 - stats.last_sync_ts > 12 * 3600) {
+      autoSynced.current = true
+      onSync()
+    }
+  }, [stats])
+
+  // 「换一批」轮转到下一组（纯前端、瞬时；都来自同一批 ≥阈值 的强连接，故每次都相关又不同）
+  const SHOW = 2
+  const shuffle = () => setOffset(o => (o + SHOW) % allConns.length)
 
   if (loading) return <div className="p-10 text-sm text-ink-faint">加载中…</div>
 
-  const hasVectors = conns.length > 0 || reread || themes.length > 0
+  const conns = allConns.length <= SHOW
+    ? allConns
+    : Array.from({ length: SHOW }, (_, i) => allConns[(offset + i) % allConns.length])
+  const canShuffle = allConns.length > SHOW
+  const hasVectors = allConns.length > 0 || reread || themes.length > 0
 
   return (
     <div className="px-8 py-10 max-w-[720px] mx-auto">
@@ -145,8 +156,8 @@ export default function Insight() {
 
       {!hasVectors && (
         <EmptyHint>
-          还没有语义索引。运行 <code className="text-clay">python3 lib/embedding.py --backfill</code> 后，
-          这里会浮现跨书连接、值得重读的旧划线和你最近在想的主题。
+          语义连接还在路上。点右上角「同步最新」拉取并建立语义索引后，
+          这里会浮现跨书呼应、值得重读的旧划线，和你最近在想的主题。
         </EmptyHint>
       )}
 
@@ -155,10 +166,12 @@ export default function Insight() {
         <section className="mb-10">
           <div className="flex items-center justify-between mb-1">
             <h2 className="text-sm font-medium text-ink-soft">近期呼应</h2>
-            <button onClick={shuffle} disabled={shuffling}
-              className="flex items-center gap-1 text-xs text-ink-faint hover:text-clay disabled:opacity-50">
-              <RefreshCw className={`w-3 h-3 ${shuffling ? 'animate-spin' : ''}`} /> 换一批
-            </button>
+            {canShuffle && (
+              <button onClick={shuffle}
+                className="flex items-center gap-1 text-xs text-ink-faint hover:text-clay">
+                <RefreshCw className="w-3 h-3" /> 换一批
+              </button>
+            )}
           </div>
           <p className="text-xs text-ink-faint mb-4">你最近读到的，与历史里某本书的划线遥相呼应</p>
           <div className="space-y-4">
