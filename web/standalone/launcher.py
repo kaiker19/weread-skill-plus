@@ -15,6 +15,13 @@ import time
 import webbrowser
 from pathlib import Path
 
+# Windows 控制台默认 cp1252，打印中文/箭头会 UnicodeEncodeError 直接崩。统一改 UTF-8。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 _HERE = Path(__file__).resolve().parent          # web/standalone
 _WEB = _HERE.parent                              # web
 _ROOT = _WEB.parent                              # 项目根

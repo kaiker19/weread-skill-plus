@@ -10,14 +10,15 @@ _NAME = "models--Qdrant--bge-small-zh-v1.5"
 
 
 def main():
+    # 纯 ASCII 输出：Windows CI 控制台默认 cp1252，打印中文会 UnicodeEncodeError
     if (_MODEL_DIR / _NAME).exists():
-        print(f"模型已存在，跳过：{_MODEL_DIR / _NAME}")
+        print(f"[fetch_model] already present: {_MODEL_DIR / _NAME}")
         return
     _MODEL_DIR.mkdir(parents=True, exist_ok=True)
     os.environ["FASTEMBED_CACHE_DIR"] = str(_MODEL_DIR)
     from fastembed import TextEmbedding
-    TextEmbedding(model_name="BAAI/bge-small-zh-v1.5")   # 触发下载到 _MODEL_DIR
-    print(f"模型已下载到 {_MODEL_DIR}")
+    TextEmbedding(model_name="BAAI/bge-small-zh-v1.5")   # triggers download into _MODEL_DIR
+    print(f"[fetch_model] downloaded to {_MODEL_DIR}")
 
 
 if __name__ == "__main__":
