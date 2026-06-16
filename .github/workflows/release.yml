@@ -46,9 +46,10 @@ jobs:
         if: matrix.pack == 'zip'
         run: Compress-Archive -Path dist/WeReadDashboard/* -DestinationPath dist/WeReadDashboard-windows.zip
 
-      - name: 挂到 Release
+      - name: 挂到 Release（草稿态：构建产物先进草稿，你测完 Win 再手动 Publish）
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
           files: |
             dist/*.dmg
             dist/*.zip
