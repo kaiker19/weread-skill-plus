@@ -143,15 +143,18 @@ def active_model() -> str:
 # ── Embedding ────────────────────────────────────────────────────────────────
 
 def _embed_api(texts, cfg):
+    # 用内置 urllib，不依赖系统 curl（Windows 无 curl）
+    import urllib.request
+    import urllib.error
     body = {"model": cfg["model"], "input": texts}
-    result = subprocess.run(
-        ["curl", "-s", "-X", "POST", cfg["endpoint"],
-         "-H", f"Authorization: Bearer {cfg['api_key']}",
-         "-H", "Content-Type: application/json",
-         "-d", json.dumps(body)],
-        capture_output=True, text=True,
-    )
-    data = json.loads(result.stdout)
+    req = urllib.request.Request(
+        cfg["endpoint"], data=json.dumps(body).encode("utf-8"), method="POST",
+        headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"embedding API error: HTTP {e.code} {e.read().decode('utf-8','replace')[:160]}")
     if "data" not in data:
         raise RuntimeError(f"embedding API error: {str(data)[:200]}")
     items = sorted(data["data"], key=lambda x: x.get("index", 0))
