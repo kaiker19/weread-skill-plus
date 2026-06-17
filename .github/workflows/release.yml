@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write          # 创建 Release 需要
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # 主动切到 Node 24，消除 Node 20 弃用告警
+
 jobs:
   build:
     strategy:
