@@ -78,8 +78,12 @@ def chat(system: str, user: str, max_tokens: int = 1500):
             raise RuntimeError(f"anthropic 返回异常: {str(data)[:200]}")
         return data["content"][0]["text"]
 
-    # openai 兼容（默认）
-    data = _post(cfg["endpoint"],
+    # openai 兼容（默认）。很多服务商文档只给到 .../v1，自动补全为 chat completions 端点，
+    # 省得用户困惑（DeepSeek/Kimi 等都给 https://api.xxx/v1）
+    ep = cfg["endpoint"].rstrip("/")
+    if "/chat/completions" not in ep:
+        ep = ep + "/chat/completions" if ep.endswith("/v1") else ep + "/v1/chat/completions"
+    data = _post(ep,
                  {"Authorization": f"Bearer {cfg['api_key']}"},
                  {"model": cfg["model"],
                   "messages": [{"role": "system", "content": system},

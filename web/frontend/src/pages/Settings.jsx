@@ -9,12 +9,12 @@ const FORMATS = [
 ]
 
 const PLACEHOLDER = {
-  openai:    'https://api.deepseek.com/v1/chat/completions',
+  openai:    'https://api.deepseek.com/v1',   // 填到 /v1 即可，后端自动补全为 chat/completions
   anthropic: 'https://api.anthropic.com/v1/messages',
 }
 
 const MODEL_PLACEHOLDER = {
-  openai:    'deepseek-ai/DeepSeek-V3.2',
+  openai:    'deepseek-chat（Kimi 填 kimi-k2-0905-preview）',
   anthropic: 'claude-sonnet-4-5',
 }
 
@@ -71,6 +71,18 @@ export default function Settings() {
           <label className="block text-xs text-ink-soft mb-1">Endpoint</label>
           <input className={field} placeholder={PLACEHOLDER[cfg.format]}
             value={cfg.endpoint} onChange={e => setCfg({ ...cfg, endpoint: e.target.value })} />
+          {cfg.format === 'openai' && (
+            <p className="text-[11px] text-ink-faint mt-1.5 leading-relaxed">
+              填到 <code className="text-ink-soft">/v1</code> 即可（如 https://api.deepseek.com/v1），会自动补全。
+              <br />没有 Key？国内最省事：
+              <a href="https://platform.deepseek.com/sign_in" target="_blank" rel="noreferrer" className="text-clay hover:text-clay-ink">DeepSeek 获取</a>
+              <span className="mx-1.5 text-line">·</span>
+              <a href="https://platform.kimi.com/" target="_blank" rel="noreferrer" className="text-clay hover:text-clay-ink">Kimi 获取</a>
+              <span className="ml-2 text-ink-faint/70">文档</span>
+              <a href="https://api-docs.deepseek.com/zh-cn/" target="_blank" rel="noreferrer" className="text-ink-faint hover:text-clay ml-1">DeepSeek</a>
+              <a href="https://platform.kimi.com/docs/api/overview" target="_blank" rel="noreferrer" className="text-ink-faint hover:text-clay ml-1.5">Kimi</a>
+            </p>
+          )}
         </div>
 
         <div>
