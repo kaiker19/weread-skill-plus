@@ -62,20 +62,27 @@ def _load_api_key():
 
 
 def _api(api_name, payload=None):
+    # 用 Python 内置 urllib，不依赖系统 curl（Windows 可能没有 curl / 冻结后 PATH 找不到 → 500）
+    import urllib.request
+    import urllib.error
     key = _load_api_key()
     body = {**(payload or {}), "api_name": api_name, "skill_version": SKILL_VERSION}
-    result = subprocess.run(
-        ["curl", "-s", "-X", "POST",
-         "https://i.weread.qq.com/api/agent/gateway",
-         "-H", f"Authorization: Bearer {key}",
-         "-H", "Content-Type: application/json",
-         "-d", json.dumps(body)],
-        capture_output=True, text=True,
+    req = urllib.request.Request(
+        "https://i.weread.qq.com/api/agent/gateway",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        method="POST",
     )
     try:
-        return json.loads(result.stdout)
-    except Exception:
-        return {"errcode": -1, "errmsg": result.stdout[:200]}
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode("utf-8"))
+        except Exception:
+            return {"errcode": e.code, "errmsg": f"HTTP {e.code}"}
+    except Exception as e:
+        return {"errcode": -1, "errmsg": str(e)[:200]}
 
 
 # ── Sync functions ─────────────────────────────────────────────────────────
