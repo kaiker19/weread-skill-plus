@@ -469,6 +469,7 @@ def cross_book_connections(limit=3, anchor_n=24, min_sim=0.78):
     rec_mat = mat[recent_idx]                     # (R, dim)
     sims_all = mat @ rec_mat.T                     # (N, R)
 
+    # pairs 保持 recent_idx 顺序（_latest_indices 已按时间新→旧）：先记每条最近划线的最佳呼应
     pairs = []
     for col, ai in enumerate(recent_idx):
         sims = sims_all[:, col].copy()
@@ -478,10 +479,12 @@ def cross_book_connections(limit=3, anchor_n=24, min_sim=0.78):
         if s > 0:
             pairs.append((s, ai, bi))
 
-    # 先按相似度去重，得到一池"较强候选"，再从中随机挑——保质量又有新鲜感（换一批会变）
-    pairs.sort(key=lambda x: -x[0])
+    # 「最新优先」：按时间顺序挑达标(≥min_sim)的呼应并去重——你刚读的、有呼应的先上，
+    # 而不是被更早但更强的挤掉。前端再对这一池做轮转换一批，兼顾新鲜与多样。
     pool, seen_echo, seen_pair = [], set(), set()
     for s, ai, bi in pairs:
+        if s < min_sim:
+            continue
         a, e = rows[ai], rows[bi]
         if e["source_id"] in seen_echo:
             continue
@@ -491,18 +494,14 @@ def cross_book_connections(limit=3, anchor_n=24, min_sim=0.78):
         seen_echo.add(e["source_id"])
         seen_pair.add(bp)
         pool.append((s, ai, bi))
-        if len(pool) >= max(limit * 3, 8):   # 取 top 一池（如 8-9 条）
+        if len(pool) >= max(limit * 3, 8):
             break
 
-    # 抬阈值提准：只从足够强的候选里挑（宁少勿滥）；若一条都没过线，保底给最强的 1 条
-    strong = [p for p in pool if p[0] >= min_sim]
-    if strong:
-        chosen = random.sample(strong, min(limit, len(strong)))
-    elif pool:
-        chosen = [max(pool, key=lambda x: x[0])]   # 不空场：给最准的一条
-    else:
-        chosen = []
-    chosen.sort(key=lambda x: -x[0])
+    # 保底：最近这批都没达标 → 给最近 24 条里最强的一条，不空场
+    if not pool and pairs:
+        pool = [max(pairs[:24], key=lambda x: x[0])]
+
+    chosen = pool[:limit]
     return [{"anchor": _meta(rows[ai]), "echo": _meta(rows[bi]), "similarity": round(s, 3)}
             for s, ai, bi in chosen]
 
