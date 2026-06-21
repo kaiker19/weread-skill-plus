@@ -76,7 +76,7 @@ def _load_api_config():
     if not p.exists():
         return None
     try:
-        cfg = json.loads(p.read_text())
+        cfg = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
     if cfg.get("api_key") and cfg.get("endpoint"):

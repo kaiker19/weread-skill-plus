@@ -44,13 +44,13 @@ def _load_api_key():
     # 1. data/api_key 文件（推荐，最稳定）—— 打包后落用户目录，与向导写入同源
     key_file = data_dir() / "api_key"
     if key_file.exists():
-        val = key_file.read_text().strip()
+        val = key_file.read_text(encoding="utf-8").strip()
         if val:
             return val
     # 2. .env 文件（兼容本地开发习惯）
     env_path = root / ".env"
     if env_path.exists():
-        for line in env_path.read_text().splitlines():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
             if line.strip().startswith("WEREAD_API_KEY="):
                 val = line.split("=", 1)[1].strip()
                 if val:

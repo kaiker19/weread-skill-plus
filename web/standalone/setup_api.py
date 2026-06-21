@@ -122,7 +122,7 @@ def attach(app):
 
     @router.get("/api/settings/apikey")
     def get_apikey():
-        configured = _API_KEY_FILE.exists() and bool(_API_KEY_FILE.read_text().strip())
+        configured = _API_KEY_FILE.exists() and bool(_API_KEY_FILE.read_text(encoding="utf-8").strip())
         return {"configured": configured}
 
     @router.post("/api/settings/apikey")
@@ -132,8 +132,8 @@ def attach(app):
             raise HTTPException(status_code=400, detail="API Key 为空")
         _API_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
         # 先备份旧值，校验失败可回滚，避免把一个无效 key 写坏
-        old = _API_KEY_FILE.read_text() if _API_KEY_FILE.exists() else None
-        _API_KEY_FILE.write_text(key)
+        old = _API_KEY_FILE.read_text(encoding="utf-8") if _API_KEY_FILE.exists() else None
+        _API_KEY_FILE.write_text(key, encoding="utf-8")
         ok, err = _validate_key()
         if not ok:
             if old is None:
@@ -142,7 +142,7 @@ def attach(app):
                 except Exception:
                     pass
             else:
-                _API_KEY_FILE.write_text(old)
+                _API_KEY_FILE.write_text(old, encoding="utf-8")
             raise HTTPException(status_code=400, detail=f"Key 校验失败：{err}")
         return {"ok": True, "configured": True}
 
@@ -150,7 +150,7 @@ def attach(app):
     def full_sync_start():
         if _full_sync["running"]:
             raise HTTPException(status_code=409, detail="全量同步已在进行")
-        if not (_API_KEY_FILE.exists() and _API_KEY_FILE.read_text().strip()):
+        if not (_API_KEY_FILE.exists() and _API_KEY_FILE.read_text(encoding="utf-8").strip()):
             raise HTTPException(status_code=409, detail="尚未配置 WeRead API Key")
         _full_sync.update(running=True, finished=False, phase="启动中", current="",
                           total=0, done=0, new_highlights=0, new_reviews=0,

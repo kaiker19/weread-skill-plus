@@ -179,7 +179,7 @@ def get_llm_settings():
     if not _LLM_CFG.exists():
         return {"configured": False, "endpoint": "", "model": "", "format": "openai"}
     try:
-        cfg = json.loads(_LLM_CFG.read_text())
+        cfg = json.loads(_LLM_CFG.read_text(encoding="utf-8"))
     except Exception:
         return {"configured": False, "endpoint": "", "model": "", "format": "openai"}
     return {
@@ -197,7 +197,7 @@ def save_llm_settings(s: LLMSettings):
     existing = {}
     if _LLM_CFG.exists():
         try:
-            existing = json.loads(_LLM_CFG.read_text())
+            existing = json.loads(_LLM_CFG.read_text(encoding="utf-8"))
         except Exception:
             existing = {}
     # api_key 留空 = 不修改，沿用已存的（兑现 UI「已保存，留空则不修改」的承诺，
@@ -207,7 +207,7 @@ def save_llm_settings(s: LLMSettings):
     _LLM_CFG.write_text(json.dumps({
         "endpoint": s.endpoint.strip(), "api_key": api_key,
         "model": s.model.strip(), "format": s.format.strip() or "openai",
-    }, ensure_ascii=False))
+    }, ensure_ascii=False), encoding="utf-8")
     try:
         from llm import chat
         r = chat("只回复两个字：好的", "测试连通")

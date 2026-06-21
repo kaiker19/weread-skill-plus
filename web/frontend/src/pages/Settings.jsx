@@ -14,7 +14,7 @@ const PLACEHOLDER = {
 }
 
 const MODEL_PLACEHOLDER = {
-  openai:    'deepseek-chat（Kimi 填 kimi-k2-0905-preview）',
+  openai:    'deepseek-chat',
   anthropic: 'claude-sonnet-4-5',
 }
 

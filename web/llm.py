@@ -28,7 +28,7 @@ def _load_config():
     if not p.exists():
         return None
     try:
-        cfg = json.loads(p.read_text())
+        cfg = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
     if cfg.get("api_key") and cfg.get("endpoint") and cfg.get("model"):
@@ -96,7 +96,7 @@ def chat(system: str, user: str, max_tokens: int = 1500):
 def _read_prompt(name: str) -> str:
     # 打包后 prompts 在 _MEIPASS/prompts；开发态在项目根 prompts/
     base = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else ROOT
-    return (base / "prompts" / name).read_text()
+    return (base / "prompts" / name).read_text(encoding="utf-8")
 
 
 def summarize_book(payload: dict):
