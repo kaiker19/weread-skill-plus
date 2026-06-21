@@ -168,10 +168,8 @@ export default function App() {
           重新双击「<span className="text-ink">微信读书</span>」图标打开，这个页面会自动恢复。
         </p>
         <div className="flex items-center justify-center gap-1.5 mt-5 text-xs text-ink-faint">
-          <Loader2 className="w-3.5 h-3.5 animate-spin" /> 正在等待应用重新打开…
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> 重新打开后本页会自动恢复…
         </div>
-        <button onClick={() => window.location.reload()}
-          className="mt-3 text-xs text-ink-faint hover:text-clay">手动刷新</button>
       </div>
     </div>
   )
