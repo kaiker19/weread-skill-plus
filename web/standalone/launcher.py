@@ -54,12 +54,15 @@ def _ensure_user_data_dir():
 
 
 def _seed_bundled_model(models_dir):
-    """若用户目录还没有模型，从二进制里内置的副本拷过去（离线/国内可用）。"""
+    """若用户目录还没有模型，从二进制里内置的副本拷过去（离线/国内可用）。
+    Windows(onedir) 的 datas 落在 exe 同级的 _internal/，故多搜几处。"""
     import shutil
     name = "models--Qdrant--bge-small-zh-v1.5"
     if (models_dir / name).exists():
         return
-    for base in (getattr(sys, "_MEIPASS", None), str(_HERE), str(Path(sys.executable).resolve().parent)):
+    exe_dir = Path(sys.executable).resolve().parent
+    for base in (getattr(sys, "_MEIPASS", None), str(_HERE), str(exe_dir),
+                 str(exe_dir / "_internal"), str(_HERE / "_internal")):
         if not base:
             continue
         src = Path(base) / "fastembed_models" / name

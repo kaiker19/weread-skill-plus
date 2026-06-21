@@ -183,6 +183,37 @@ def attach(app):
             threading.Thread(target=_watchdog, daemon=True).start()
         return {"ok": True}
 
+    @router.get("/api/_debug/embed")
+    def debug_embed():
+        """诊断：模型在不在、fastembed 能不能跑、库里向量多少。Win 排障用。"""
+        import os, traceback, sqlite3
+        info = {"frozen": bool(getattr(sys, "frozen", False)),
+                "meipass": getattr(sys, "_MEIPASS", None),
+                "exec_dir": str(Path(sys.executable).resolve().parent),
+                "FASTEMBED_CACHE_DIR": os.environ.get("FASTEMBED_CACHE_DIR")}
+        name = "models--Qdrant--bge-small-zh-v1.5"
+        cd = os.environ.get("FASTEMBED_CACHE_DIR", "")
+        info["model_seeded"] = bool(cd) and os.path.isdir(os.path.join(cd, name))
+        # 库里向量/划线数（看嵌入有没有在涨）
+        try:
+            from knowledge_base import get_db_path
+            c = sqlite3.connect(str(get_db_path()))
+            info["highlights"] = c.execute("SELECT COUNT(*) FROM highlights").fetchone()[0]
+            info["embeddings"] = c.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        except Exception:
+            info["db_error"] = traceback.format_exc()[-400:]
+        # 试一次嵌入
+        try:
+            from embedding import _resolve_source, embed_texts
+            src = _resolve_source(verbose=False)
+            info["source"] = type(src).__name__ if src else None
+            if src:
+                v = embed_texts(["测试一下"], src)
+                info["embed_dim"] = len(v[0]) if v else 0
+        except Exception:
+            info["embed_error"] = traceback.format_exc()[-1000:]
+        return info
+
     app.include_router(router)
     _move_spa_routes_last(app)
     return app
