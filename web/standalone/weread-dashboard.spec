@@ -49,6 +49,10 @@ hiddenimports += collect_submodules("uvicorn")
 # 概念抽取、读后总结生成会因 import 失败而静默崩溃。
 hiddenimports += ["server", "setup_api", "knowledge_base", "embedding", "sync",
                   "fastapi", "jieba", "llm", "book_summary"]
+# certifi 是 knowledge_base.ssl_context() 里函数内懒导入的，静态分析抓不到 → 显式列出，
+# 否则冻结版不带 cacert.pem，非系统 Python 构建的包连 i.weread.qq.com 会 SSL 验证失败。
+# 列出后 PyInstaller 的 certifi hook 会自动收集 cacert.pem 并让 certifi.where() 指向它。
+hiddenimports += ["certifi"]
 
 a = Analysis(
     [str(STANDALONE / "launcher.py")],
