@@ -45,6 +45,26 @@ def get_db_path() -> Path:
     return data_dir() / "knowledge.db"
 
 
+_SSL_CTX = None
+
+
+def ssl_context():
+    """所有 urllib HTTPS 请求共用的 SSL context（缓存一次）。
+    优先用 certifi 的 CA bundle——修非系统 Python(Homebrew/python.org/pyenv)
+    连 i.weread.qq.com 时 CERTIFICATE_VERIFY_FAILED（它们用 OpenSSL，不带根证书库；
+    系统 /usr/bin/python3 走 LibreSSL+钥匙串才无此问题，curl 同样走系统证书）。
+    没装 certifi 则回退系统默认 context（系统 python 本就能连）。"""
+    global _SSL_CTX
+    if _SSL_CTX is None:
+        import ssl
+        try:
+            import certifi
+            _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            _SSL_CTX = ssl.create_default_context()
+    return _SSL_CTX
+
+
 @contextmanager
 def _conn(db_path: Path = None):
     if db_path is None:

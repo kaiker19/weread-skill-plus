@@ -65,6 +65,7 @@ def _api(api_name, payload=None):
     # 用 Python 内置 urllib，不依赖系统 curl（Windows 可能没有 curl / 冻结后 PATH 找不到 → 500）
     import urllib.request
     import urllib.error
+    from knowledge_base import ssl_context
     key = _load_api_key()
     body = {**(payload or {}), "api_name": api_name, "skill_version": SKILL_VERSION}
     req = urllib.request.Request(
@@ -74,7 +75,7 @@ def _api(api_name, payload=None):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30, context=ssl_context()) as r:
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         try:

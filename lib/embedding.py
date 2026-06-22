@@ -146,12 +146,13 @@ def _embed_api(texts, cfg):
     # 用内置 urllib，不依赖系统 curl（Windows 无 curl）
     import urllib.request
     import urllib.error
+    from knowledge_base import ssl_context
     body = {"model": cfg["model"], "input": texts}
     req = urllib.request.Request(
         cfg["endpoint"], data=json.dumps(body).encode("utf-8"), method="POST",
         headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=60, context=ssl_context()) as r:
             data = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"embedding API error: HTTP {e.code} {e.read().decode('utf-8','replace')[:160]}")

@@ -45,12 +45,13 @@ def _post(url, headers, body):
     # 用 Python 内置 urllib，不依赖系统 curl（Windows 可能没有 → LLM 功能直接坏）
     import urllib.request
     import urllib.error
+    from knowledge_base import ssl_context
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         url, data=data, method="POST",
         headers={"Content-Type": "application/json", **headers})
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with urllib.request.urlopen(req, timeout=120, context=ssl_context()) as r:
             raw = r.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace")   # 错误体里常有有用信息

@@ -34,6 +34,7 @@ def _api(api_name, payload=None):
     # 用内置 urllib，不依赖系统 curl，且显式 utf-8 解码（curl+text=True 在 Windows 会用 GBK 解码中文 → 崩）
     import urllib.request
     import urllib.error
+    from knowledge_base import ssl_context
     key = _load_api_key()
     body = {**(payload or {}), "api_name": api_name, "skill_version": SKILL_VERSION}
     req = urllib.request.Request(
@@ -43,7 +44,7 @@ def _api(api_name, payload=None):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30, context=ssl_context()) as r:
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         try:
