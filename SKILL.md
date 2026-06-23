@@ -166,8 +166,8 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/lib/sync.py --force
 
 ## 依赖
 
-- Python 3.9+
-- `curl` 命令行工具
+- Python 3.9+（HTTP 走内置 `urllib`，不再依赖系统 `curl`）
+- `certifi`（HTTPS 根证书）—— macOS 上的**非系统 Python**（Homebrew / python.org / pyenv，用 OpenSSL）连 `i.weread.qq.com` 必需，否则 `CERTIFICATE_VERIFY_FAILED`；缺失时自动回退系统默认证书库（系统 `/usr/bin/python3`、Windows、Linux 本就自带，可免）。一行修复：`pip install certifi`
 - `jieba`（跨书呼应分词，需 `pip install jieba`）—— 未安装时自动降级为 n-gram 兜底分词，回声仍可用但质量下降，并在 stderr 给出提示
 
 **可选（语义向量索引，见下）**：

@@ -20,11 +20,26 @@
 
 ## 安装
 
-### 通过 npx（推荐）
+这个项目有**两种用法**，按你的身份二选一：
+
+### 🖱 普通用户 —— 下载本地应用，双击即用（零命令行）
+
+到 [Releases](https://github.com/kaiker19/weread-skill-plus/releases/latest) 下载对应平台：
+
+- **macOS**：`.dmg` → 拖入「应用程序」→ 打开
+- **Windows**：`.zip` → 解压 → 双击 `WeReadDashboard.exe`
+
+首次打开有向导带你走完：填 WeRead API Key → 全量同步 → 建语义索引（中文模型已内置，无需联网下载）。之后就是书架 / 探索 / 写作台 / 洞见 / 概念图谱的本地图形界面，数据全留本机。
+
+> macOS 首次打开若提示「无法验证开发者」：系统设置 → 隐私与安全性 → 下方「仍要打开」。
+
+### 🤖 Agent 用户 —— 作为 Claude Code / OpenClaw 技能
 
 ```bash
-npx skills add kaiker19/weread-skill-plus
+npx skills add kaiker19/weread-skill-plus -y      # -y 跳过交互式 agent 选择（无 TTY / 让 agent 自动装时必须）
 ```
+
+> 不加 `-y` 会进入交互式列表让你选装到哪个 agent；在真终端里手动装可以这样选，但在 agent 自动执行或无 TTY 环境下会卡住等输入。
 
 ### 配置 API Key
 
@@ -70,8 +85,10 @@ python3 lib/embedding.py --test "强势思维"   # 验证语义检索
 
 ## 依赖
 
-- Python 3.9+
-- `curl`
+> 下载的本地应用已自带全部依赖，下面只针对 **Agent / CLI 用法**。
+
+- Python 3.9+（HTTP 走内置 `urllib`，不再依赖系统 `curl`）
+- `certifi`（HTTPS 根证书）—— macOS 上的**非系统 Python**（Homebrew/python.org/pyenv）连微信读书 API 必需，否则 `CERTIFICATE_VERIFY_FAILED`；`pip install certifi` 即可。系统 `/usr/bin/python3`、Windows、Linux 自带证书，可免
 - `jieba`（跨书呼应分词，`pip install jieba`；缺失时自动降级为 n-gram 兜底，质量下降）
 - 可选：`fastembed` + `numpy`（语义向量索引，见上方「可选：语义向量索引」；不装则跨书呼应走 jieba）
 
@@ -80,6 +97,8 @@ python3 lib/embedding.py --test "强势思维"   # 验证语义检索
 ## 文档
 
 - [SKILL.md](SKILL.md) — 给 Agent 读的技能定义（接口、数据结构、执行模型）
+- [references/web.md](references/web.md) — 本地 Web 面板（书架 / 探索 / 写作台 / 洞见 / 概念图谱）启动与各页用法
+- **CLI**：`python3 cli/weread.py recall "<想法>"`（语义找回划线）、`weread concepts`（概念地图）—— 零 LLM，可被编辑器 / 启动器 shell-out 调用
 
 ---
 
