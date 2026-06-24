@@ -58,6 +58,10 @@ export default function Explore() {
   const hasQ = debouncedQ.length > 0
   const showPanel = !!concept || hasQ
 
+  // 结果分层：≥0.70 强呼应、0.60–0.70 可能相关，<0.60 当噪音不展示（用一句话提问比敲单词准得多）
+  const strong = passages.filter(p => (p.similarity ?? 0) >= 0.70)
+  const maybe  = passages.filter(p => { const s = p.similarity ?? 0; return s >= 0.60 && s < 0.70 })
+
   return (
     <div className="px-6 md:px-10 py-8">
       <div className="mb-4">
@@ -69,11 +73,16 @@ export default function Explore() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
         <input
           type="text"
-          placeholder="输入概念或一段想法，找回并连接你的思考…"
+          placeholder="用一句话描述你在想的问题，越具体越准…"
           value={q}
           onChange={e => setQ(e.target.value)}
           className="w-full pl-9 pr-4 py-2 text-sm border border-line rounded-lg bg-surface focus:outline-none focus:ring-2 focus:ring-clay/30"
         />
+        {!hasQ && (
+          <p className="text-[11px] text-ink-faint mt-2 leading-relaxed">
+            提示：问一个完整的问题比敲单词更准。如「如何面对风险和不确定性」「怎么判断一个东西是不是真的」
+          </p>
+        )}
       </div>
 
       {/* 图谱全宽；详情走右侧统一浮层（不占布局、不抖动） */}
@@ -100,12 +109,27 @@ export default function Explore() {
           ) : (
             <>
               <div className="text-xs text-ink-faint mb-3">
-                「{debouncedQ}」相关划线 {loading ? '…' : `· ${passages.length} 条`}
+                「{debouncedQ}」相关划线 {loading ? '…' : `· ${strong.length + maybe.length} 条`}
               </div>
-              <div className="space-y-2.5">
-                {passages.map((p, i) => <PassageCard key={i} item={p} />)}
-                {!loading && passages.length === 0 && <p className="text-xs text-ink-faint py-4">没有相近的划线</p>}
-              </div>
+              {!loading && strong.length + maybe.length === 0 && (
+                <p className="text-xs text-ink-faint py-4">没有相近的划线。试试用一句话把问题说得更具体。</p>
+              )}
+              {strong.length > 0 && (
+                <>
+                  <div className="text-[11px] font-medium text-clay-ink mb-2">强呼应</div>
+                  <div className="space-y-2.5 mb-5">
+                    {strong.map((p, i) => <PassageCard key={'s' + i} item={p} />)}
+                  </div>
+                </>
+              )}
+              {maybe.length > 0 && (
+                <>
+                  <div className="text-[11px] font-medium text-ink-faint mb-2">可能相关</div>
+                  <div className="space-y-2.5">
+                    {maybe.map((p, i) => <PassageCard key={'m' + i} item={p} />)}
+                  </div>
+                </>
+              )}
             </>
           )}
         </aside>

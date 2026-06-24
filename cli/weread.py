@@ -18,7 +18,8 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / "lib"))
 
 
-MIN_SIM = 0.55  # 召回相关度下限：宁缺毋滥（伪相关多 <0.55，真相关多 ≥0.6）
+MIN_SIM = 0.60  # 召回相关度下限：宁缺毋滥。实测 0.55~0.60 多是被字面词带偏的弱相关
+                # （"安全边际"召回到"组织创新"那类），抬到 0.60 去尾部噪音，真相关基本 ≥0.6
 
 
 def _recall(args):
