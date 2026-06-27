@@ -11,3 +11,7 @@ web/docs/
 /dist/
 /build/
 *.spec.bak
+
+# 录屏素材（走 GitHub 附件 CDN，不进仓库）
+*.mp4
+*.mov
