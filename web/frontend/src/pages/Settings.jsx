@@ -24,12 +24,28 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState(null)
 
+  // 微信读书 Key：仅单机版有 /api/settings/apikey；dev/agent 下 GET 404 → 不显示该区块
+  const [wrAvail, setWrAvail]   = useState(false)
+  const [wrCfg, setWrCfg]       = useState(false)
+  const [wrKey, setWrKey]       = useState('')
+  const [wrSaving, setWrSaving] = useState(false)
+  const [wrResult, setWrResult] = useState(null)
+
   useEffect(() => {
     api.getLlmSettings().then(s => {
       setConfigured(s.configured)
       setCfg(c => ({ ...c, endpoint: s.endpoint, model: s.model, format: s.format || 'openai' }))
     }).catch(() => {})
+    api.apikeyStatus().then(r => { setWrAvail(true); setWrCfg(!!r.configured) }).catch(() => setWrAvail(false))
   }, [])
+
+  const saveWeread = () => {
+    setWrSaving(true); setWrResult(null)
+    api.saveApikey(wrKey.trim())
+      .then(() => { setWrResult({ ok: true }); setWrCfg(true); setWrKey('') })
+      .catch(e => setWrResult({ ok: false, error: e.message || '保存失败' }))
+      .finally(() => setWrSaving(false))
+  }
 
   const save = () => {
     setSaving(true); setResult(null)
@@ -48,8 +64,42 @@ export default function Settings() {
       </Link>
       <h1 className="text-2xl font-semibold tracking-tight text-ink">设置</h1>
       <p className="text-xs text-ink-faint mt-1.5 mb-6">
-        配置一个 LLM 用于「生成读后总结」。本地保存在 <code className="text-clay">data/llm.json</code>，不上传、不进 git。
+        管理微信读书 Key 与生成读后总结用的 LLM。配置都保存在本机，不上传、不进 git。
       </p>
+
+      {wrAvail && (
+        <>
+          <h2 className="text-sm font-medium text-ink mb-3">微信读书 API Key</h2>
+          <div className="bg-surface rounded-2xl border border-line shadow-card p-6 space-y-4 mb-8">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-ink-soft">当前状态：</span>
+              {wrCfg
+                ? <span className="text-emerald-600 flex items-center gap-1"><CheckCircle className="w-4 h-4" />已配置</span>
+                : <span className="text-ink-faint">未配置</span>}
+            </div>
+            <div>
+              <label className="block text-xs text-ink-soft mb-1">
+                新的 Key {wrCfg && <span className="text-ink-faint">（换了微信读书 Key 时在此更新）</span>}
+              </label>
+              <input className={field} placeholder="wrk-..."
+                value={wrKey} onChange={e => setWrKey(e.target.value)} />
+              <p className="text-[11px] text-ink-faint mt-1.5 leading-relaxed">
+                在 <a href="https://weread.qq.com/r/weread-skills" target="_blank" rel="noreferrer" className="text-clay hover:text-clay-ink">weread-skills 页面</a> 获取，粘贴后保存会自动校验有效性。
+              </p>
+            </div>
+            <button onClick={saveWeread} disabled={wrSaving || !wrKey.trim()}
+              className="px-4 py-2 text-sm bg-clay-grad text-white rounded-lg shadow-sm hover:opacity-95 disabled:opacity-40 transition-opacity">
+              {wrSaving ? '保存并校验中…' : '保存并校验'}
+            </button>
+            {wrResult && (
+              <div className={`text-sm flex items-start gap-2 ${wrResult.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {wrResult.ok ? <CheckCircle className="w-4 h-4 mt-0.5" /> : <XCircle className="w-4 h-4 mt-0.5" />}
+                {wrResult.ok ? 'Key 已更新并校验通过' : `校验失败：${wrResult.error}`}
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       <h2 className="text-sm font-medium text-ink mb-3">LLM 配置</h2>
       <div className="bg-surface rounded-2xl border border-line shadow-card p-6 space-y-4">
