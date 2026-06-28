@@ -229,6 +229,9 @@ def _ima_sync(args):
     fails = []
     for b in get_all_books():
         bid = b["book_id"]
+        if not args.all and not b.get("finish_time"):
+            continue  # 默认只同步「读完」的书：ima 无法更新，未读完的书划线还会变，
+                      # 导进去就是过时副本、且 ima 删不掉。读完的书划线稳定，导一次即最终版。
         hls, revs = get_highlights_for_book(bid), get_reviews_for_book(bid)
         if not hls and not revs:
             continue
@@ -271,9 +274,11 @@ def main():
                     help="导出目录（默认 ./weread-export，可指向 Obsidian vault 子目录）")
     ec.set_defaults(func=_export)
 
-    mc = sub.add_parser("ima", help="增量同步到 ima 知识库（防重复、限速、可续）")
+    mc = sub.add_parser("ima", help="增量同步「读完」的书到 ima 知识库（防重复、限速、可续）")
     mc.add_argument("--kb", help="目标知识库名称（不传则列出可用知识库）")
     mc.add_argument("--list", action="store_true", help="列出可用的 ima 知识库")
+    mc.add_argument("--all", action="store_true",
+                    help="连未读完的书也导（默认只导读完的——ima 无法更新，未读完的会过时）")
     mc.set_defaults(func=_ima_sync)
 
     args = p.parse_args()
