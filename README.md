@@ -113,7 +113,7 @@ python3 lib/embedding.py --test "强势思维"   # 验证语义检索
 
 - [SKILL.md](SKILL.md) — 给 Agent 读的技能定义（接口、数据结构、执行模型）
 - [references/web.md](references/web.md) — 本地 Web 面板（书架 / 探索 / 写作台 / 洞见 / 概念图谱）启动与各页用法
-- **CLI**：`weread recall "<想法>"`（语义找回划线）、`weread concepts`（概念地图）、`weread export`（导出 Obsidian markdown）—— 零 LLM，可被编辑器 / 启动器 shell-out 调用
+- **CLI**：`weread recall "<想法>"`（语义找回划线）、`weread concepts`（概念地图）、`weread export`（导出 Obsidian markdown）、`weread ima`（增量同步到 ima 知识库）—— 可被编辑器 / 启动器 shell-out 调用
 
 ---
 

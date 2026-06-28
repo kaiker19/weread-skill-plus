@@ -130,7 +130,7 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/weekly_review/weekly_
 把划线 / 批注 / 读后总结导出到 **Obsidian**（markdown）或灌进 **腾讯 ima**（笔记 / 知识库，可 AI 问答）。
 
 - 用户说「导出到 Obsidian / 导出 markdown / 同步到我的笔记库」→ `python3 cli/weread.py export --out <vault 目录>`
-- 用户说「存进 ima / 同步到 ima 知识库 / 导入 ima」→ 用 `lib/ima.py`（需用户自备 ima 凭证；知识库要先在 ima 客户端手工建）
+- 用户说「存进 ima / 同步到 ima 知识库 / 导入 ima」→ `python3 cli/weread.py ima --kb <知识库名>`（增量、防重复；需 ima 凭证 + 先在 ima 客户端建好知识库）
 
 触发任一时，**先读 [references/external-kb.md](references/external-kb.md)** 再按其操作（含凭证配置、批量灌入限速、各场景示例）。
 
@@ -270,6 +270,7 @@ python3 cli/weread.py concepts --extract         # 先用 data/llm.json 的 LLM 
 python3 cli/weread.py concepts --json            # 概念图谱原始 JSON（nodes/links）
 
 python3 cli/weread.py export --out <vault 目录>   # 导出 Obsidian markdown（每本书一个 .md：总结+划线+批注+概念双链）
+python3 cli/weread.py ima --kb <知识库名>          # 增量同步到 ima 知识库（防重复、限速；需 ima 凭证）
 ```
 
 `recall` 是按一段话/概念语义找回相关划线；`concepts` 把全库已抽出的概念做语义聚类，呈现你的「概念地图」——哪些概念彼此相近、最强的跨书关联是什么，纯 embedding、零 LLM。概念本身的抽取需要 LLM（划线→概念标签）：`--extract` 复用 `data/llm.json` 的配置（与本地面板同一套），网页面板的「生成概念图谱」也写同一张表，二者通用。

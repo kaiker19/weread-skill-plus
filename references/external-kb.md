@@ -47,28 +47,23 @@ print(r)  # {code:0, data:{note_id}}
 "
 ```
 
-### 场景 2：把整本书灌进 ima 知识库（可被 ima AI 问答）
+### 场景 2：把书灌进 ima 知识库（可被 ima AI 问答）—— 用 `weread ima`
 
-⚠️ **ima OpenAPI 没有「创建知识库」接口** —— 知识库需用户先在 ima 客户端手工建一个（如「微信读书」），之后才能往里灌。
+⚠️ **ima OpenAPI 没有「创建知识库」接口** —— 先在 ima 客户端手工建一个（如「微信读书」）。
 
 ```bash
-python3 -c "
-import sys; sys.path.insert(0,'lib')
-import ima
-# 1) 找到目标知识库 id
-kbs = ima.list_knowledge_bases()
-kb = next(k for k in kbs if k['name']=='微信读书')
-# 2) 整本书 markdown → 笔记 → 纳入知识库（media_type=11）
-md = open('/path/to/book.md').read()   # 或用 cli/weread.py 的渲染逻辑现拼
-r = ima.add_to_knowledge_base(md, kb['id'], '书名')
-print(r)  # {note_id, media_id} 或 {error, stage}
-"
+python3 cli/weread.py ima --list              # 列出可用知识库
+python3 cli/weread.py ima --kb 微信读书        # 把未导入的书增量灌进去
 ```
 
-批量灌入：遍历 `knowledge_base.get_all_books()`，对每本有划线的书拼 markdown（总结+按章节划线+批注+概念）→ `add_to_knowledge_base`，**每本间 `time.sleep(0.7)` 限速防频控**（ima 错误码 `110021` 频控、`20002` 限频）。
-
-- 用户说「存进 ima / 同步到 ima 知识库 / 导入 ima」即触发。
+- **增量防重复**：本地记已导入的 book_id（`data/ima_synced.json`），重跑只导新书、不产生重复。
+  这很关键——ima **没有去重 / 删除接口**，重复 `import_doc` 会留下两份且删不掉，全靠这边跳过已导。
+- 内置限速（每本 0.7s，防频控 `110021`/`20002`），逐本落盘、中断可续。
+- 凭证同上（环境变量或 `~/.config/ima/`）。
+- **局限**：已导入的书有了新划线**无法更新**（ima 限制：`import_doc` 只能新建）；要刷新得在 ima 手动删旧笔记、并从 `ima_synced.json` 移除该 book_id 后重导。
 - 灌入后 ima 后台需几分钟向量化才能问答；条目立即可见。
+
+（只写单篇笔记用 `ima.import_note`，见场景 1。底层批量函数是 `lib/ima.add_to_knowledge_base`。）
 
 ---
 

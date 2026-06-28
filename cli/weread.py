@@ -121,27 +121,20 @@ def _safe_filename(name):
     return name[:80] or "untitled"
 
 
-def _render_md(b, hls, revs, summ, tags):
-    """一本书 → Obsidian markdown：frontmatter + 读后总结 + 按章节的划线 + 批注 + 概念双链。"""
-    title = (b.get("title") or "").replace('"', '\\"')
-    fm = ["---", f'title: "{title}"']
-    if b.get("author"):   fm.append(f'author: "{(b["author"] or "").replace(chr(34), "")}"')
-    if b.get("category"): fm.append(f'category: "{b["category"]}"')
-    fm.append(f'book_id: "{b["book_id"]}"')
-    fm.append("source: 微信读书")
-    if b.get("finish_time"):
-        from datetime import datetime, timezone, timedelta
-        fm.append("finished: " + datetime.fromtimestamp(
-            b["finish_time"], timezone(timedelta(hours=8))).strftime("%Y-%m-%d"))
-    fm.append("tags:")
-    for t in ["微信读书"] + tags:
-        fm.append(f'  - "{t}"')
-    fm.append("---")
+def _book_tags(bid):
+    """某本书的概念标签（去重）。"""
+    from knowledge_base import _conn
+    with _conn() as c:
+        return [r[0] for r in c.execute(
+            "SELECT DISTINCT tag FROM concepts WHERE book_id=?", (bid,)).fetchall()]
 
-    body = ["", f"# {b.get('title') or ''}"]
+
+def _book_body(b, hls, revs, summ, tags, wiki_links=True):
+    """书正文 markdown：标题 + 元信息 + 读后总结 + 按章节划线 + 批注 + 概念。
+    wiki_links：概念是否用 [[双链]]（Obsidian 用，ima 用纯文本）。"""
+    body = [f"# {b.get('title') or ''}"]
     meta = " · ".join(x for x in [b.get("author"), b.get("category")] if x)
-    if meta:
-        body += [f"> {meta}", ""]
+    body += [f"> {meta}", ""] if meta else [""]
     if summ and summ.get("content"):
         body += ["## 读后总结", "", summ["content"].strip(), ""]
     if hls:
@@ -160,13 +153,33 @@ def _render_md(b, hls, revs, summ, tags):
             body.append(f"- {' '.join((r.get('content') or '').split())}")
         body.append("")
     if tags:
-        body += ["---", "概念  " + " ".join(f"[[{t}]]" for t in tags)]
-    return "\n".join(fm + body) + "\n"
+        cs = " ".join(f"[[{t}]]" for t in tags) if wiki_links else "  ".join(tags)
+        body += ["---", "概念  " + cs]
+    return "\n".join(body)
+
+
+def _render_md(b, hls, revs, summ, tags):
+    """一本书 → Obsidian markdown：frontmatter + 正文（含概念 [[双链]]）。"""
+    title = (b.get("title") or "").replace('"', '\\"')
+    fm = ["---", f'title: "{title}"']
+    if b.get("author"):   fm.append(f'author: "{(b["author"] or "").replace(chr(34), "")}"')
+    if b.get("category"): fm.append(f'category: "{b["category"]}"')
+    fm.append(f'book_id: "{b["book_id"]}"')
+    fm.append("source: 微信读书")
+    if b.get("finish_time"):
+        from datetime import datetime, timezone, timedelta
+        fm.append("finished: " + datetime.fromtimestamp(
+            b["finish_time"], timezone(timedelta(hours=8))).strftime("%Y-%m-%d"))
+    fm.append("tags:")
+    for t in ["微信读书"] + tags:
+        fm.append(f'  - "{t}"')
+    fm.append("---")
+    return "\n".join(fm) + "\n\n" + _book_body(b, hls, revs, summ, tags, wiki_links=True) + "\n"
 
 
 def _export(args):
     from knowledge_base import (get_all_books, get_highlights_for_book,
-                                get_reviews_for_book, get_latest_summary, _conn)
+                                get_reviews_for_book, get_latest_summary)
     out = Path(args.out).expanduser()
     out.mkdir(parents=True, exist_ok=True)
     n = 0
@@ -176,17 +189,66 @@ def _export(args):
         hls, revs = get_highlights_for_book(bid), get_reviews_for_book(bid)
         if not hls and not revs:
             continue  # 没划线没批注的书不导
-        with _conn() as c:
-            tags = [r[0] for r in c.execute(
-                "SELECT DISTINCT tag FROM concepts WHERE book_id=?", (bid,)).fetchall()]
         summ = get_latest_summary("book_completion", book_id=bid)
         name = _safe_filename(b.get("title") or bid)
         if name in used:                 # 仅「同名不同书」才加 book_id 区分；
             name = f"{name}_{bid}"        # 同一本书重导用同一文件名 → 直接覆盖，不再翻倍
         used.add(name)
-        (out / (name + ".md")).write_text(_render_md(b, hls, revs, summ, tags), encoding="utf-8")
+        (out / (name + ".md")).write_text(
+            _render_md(b, hls, revs, summ, _book_tags(bid)), encoding="utf-8")
         n += 1
     print(f"导出 {n} 本书 → {out}/（在 Obsidian 里把该目录作为 vault 或拖进 vault 即可）")
+
+
+def _ima_sync(args):
+    """增量把书同步到 ima 知识库：本地记已导入的 book_id（ima 没有去重/删除接口，
+    全靠这边跳过已导，避免重复笔记）。逐本落盘，中断可续。"""
+    import time
+    import ima
+    from knowledge_base import (get_all_books, get_highlights_for_book,
+                                get_reviews_for_book, get_latest_summary, data_dir)
+    try:
+        kbs = ima.list_knowledge_bases()
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr); return
+    if args.list or not args.kb:
+        if not kbs:
+            print("没有可用的 ima 知识库——先在 ima 客户端建一个（OpenAPI 不能建库）。"); return
+        print("可用知识库：" + "、".join(k["name"] for k in kbs))
+        if not args.kb:
+            print("用 `weread ima --kb <名称>` 增量导入。")
+        return
+    kb = next((k for k in kbs if k["name"] == args.kb), None)
+    if not kb:
+        print(f"没找到知识库「{args.kb}」。现有：" + "、".join(k["name"] for k in kbs)); return
+    kb_id = kb["id"]
+    statef = data_dir() / "ima_synced.json"
+    state = json.loads(statef.read_text(encoding="utf-8")) if statef.exists() else {}
+    done = set(state.get(kb_id, {}))
+    ok = skip = fail = 0
+    fails = []
+    for b in get_all_books():
+        bid = b["book_id"]
+        hls, revs = get_highlights_for_book(bid), get_reviews_for_book(bid)
+        if not hls and not revs:
+            continue
+        if bid in done:
+            skip += 1; continue
+        summ = get_latest_summary("book_completion", book_id=bid)
+        md = _book_body(b, hls, revs, summ, _book_tags(bid), wiki_links=False)
+        r = ima.add_to_knowledge_base(md, kb_id, b["title"])
+        if r.get("media_id"):
+            ok += 1
+            state.setdefault(kb_id, {})[bid] = r.get("note_id")
+            statef.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+            print(f"  ✓ {b['title'][:26]}")
+        else:
+            fail += 1; fails.append((b["title"], r.get("error"), r.get("stage")))
+            print(f"  ✗ {b['title'][:26]}：{r.get('error')} @{r.get('stage')}")
+        time.sleep(0.7)  # 限速防频控
+    print(f"\n完成：新导入 {ok}，跳过(已导) {skip}，失败 {fail} → 知识库「{args.kb}」")
+    for t, e, s in fails:
+        print(f"  失败：{t} — {e} @{s}")
 
 
 def main():
@@ -208,6 +270,11 @@ def main():
     ec.add_argument("--out", default="weread-export",
                     help="导出目录（默认 ./weread-export，可指向 Obsidian vault 子目录）")
     ec.set_defaults(func=_export)
+
+    mc = sub.add_parser("ima", help="增量同步到 ima 知识库（防重复、限速、可续）")
+    mc.add_argument("--kb", help="目标知识库名称（不传则列出可用知识库）")
+    mc.add_argument("--list", action="store_true", help="列出可用的 ima 知识库")
+    mc.set_defaults(func=_ima_sync)
 
     args = p.parse_args()
     args.func(args)
