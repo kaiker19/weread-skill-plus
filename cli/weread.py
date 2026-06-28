@@ -10,6 +10,7 @@
 可 `| pbcopy`，或被 vim / Alfred / Raycast / Obsidian / agent 等 shell-out 调用。
 """
 import sys
+import re
 import json
 import argparse
 from pathlib import Path
@@ -115,6 +116,77 @@ def _concepts(args):
     print("\n".join(out))
 
 
+def _safe_filename(name):
+    name = re.sub(r'[/\\:*?"<>|]', " ", name or "").strip()
+    return name[:80] or "untitled"
+
+
+def _render_md(b, hls, revs, summ, tags):
+    """一本书 → Obsidian markdown：frontmatter + 读后总结 + 按章节的划线 + 批注 + 概念双链。"""
+    title = (b.get("title") or "").replace('"', '\\"')
+    fm = ["---", f'title: "{title}"']
+    if b.get("author"):   fm.append(f'author: "{(b["author"] or "").replace(chr(34), "")}"')
+    if b.get("category"): fm.append(f'category: "{b["category"]}"')
+    fm.append(f'book_id: "{b["book_id"]}"')
+    fm.append("source: 微信读书")
+    if b.get("finish_time"):
+        from datetime import datetime, timezone, timedelta
+        fm.append("finished: " + datetime.fromtimestamp(
+            b["finish_time"], timezone(timedelta(hours=8))).strftime("%Y-%m-%d"))
+    fm.append("tags:")
+    for t in ["微信读书"] + tags:
+        fm.append(f'  - "{t}"')
+    fm.append("---")
+
+    body = ["", f"# {b.get('title') or ''}"]
+    meta = " · ".join(x for x in [b.get("author"), b.get("category")] if x)
+    if meta:
+        body += [f"> {meta}", ""]
+    if summ and summ.get("content"):
+        body += ["## 读后总结", "", summ["content"].strip(), ""]
+    if hls:
+        body.append(f"## 划线（{len(hls)}）")
+        cur = object()
+        for h in hls:
+            ch = h.get("chapter_title") or ""
+            if ch != cur:
+                cur = ch
+                body += ["", f"### {ch}"] if ch else [""]
+            body.append(f"- {' '.join((h.get('content') or '').split())}")
+        body.append("")
+    if revs:
+        body.append(f"## 我的批注（{len(revs)}）")
+        for r in revs:
+            body.append(f"- {' '.join((r.get('content') or '').split())}")
+        body.append("")
+    if tags:
+        body += ["---", "概念  " + " ".join(f"[[{t}]]" for t in tags)]
+    return "\n".join(fm + body) + "\n"
+
+
+def _export(args):
+    from knowledge_base import (get_all_books, get_highlights_for_book,
+                                get_reviews_for_book, get_latest_summary, _conn)
+    out = Path(args.out).expanduser()
+    out.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for b in get_all_books():
+        bid = b["book_id"]
+        hls, revs = get_highlights_for_book(bid), get_reviews_for_book(bid)
+        if not hls and not revs:
+            continue  # 没划线没批注的书不导
+        with _conn() as c:
+            tags = [r[0] for r in c.execute(
+                "SELECT DISTINCT tag FROM concepts WHERE book_id=?", (bid,)).fetchall()]
+        summ = get_latest_summary("book_completion", book_id=bid)
+        path = out / (_safe_filename(b.get("title") or bid) + ".md")
+        if path.exists():
+            path = out / (_safe_filename(b.get("title") or bid) + f"_{bid}.md")
+        path.write_text(_render_md(b, hls, revs, summ, tags), encoding="utf-8")
+        n += 1
+    print(f"导出 {n} 本书 → {out}/（在 Obsidian 里把该目录作为 vault 或拖进 vault 即可）")
+
+
 def main():
     p = argparse.ArgumentParser(prog="weread", description="本地划线库的语义能力（召回 / 概念地图）")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -129,6 +201,11 @@ def main():
     cc.add_argument("--extract", action="store_true", help="先用 data/llm.json 的 LLM 抽概念再渲染")
     cc.add_argument("--json", action="store_true", help="输出概念图谱原始 JSON（nodes/links）")
     cc.set_defaults(func=_concepts)
+
+    ec = sub.add_parser("export", help="导出为 Obsidian markdown（每本书一个 .md）")
+    ec.add_argument("--out", default="weread-export",
+                    help="导出目录（默认 ./weread-export，可指向 Obsidian vault 子目录）")
+    ec.set_defaults(func=_export)
 
     args = p.parse_args()
     args.func(args)
