@@ -125,6 +125,17 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/weekly_review/weekly_
 
 ---
 
+## 导出 / 同步到外部知识库（Obsidian / ima）
+
+把划线 / 批注 / 读后总结导出到 **Obsidian**（markdown）或灌进 **腾讯 ima**（笔记 / 知识库，可 AI 问答）。
+
+- 用户说「导出到 Obsidian / 导出 markdown / 同步到我的笔记库」→ `python3 cli/weread.py export --out <vault 目录>`
+- 用户说「存进 ima / 同步到 ima 知识库 / 导入 ima」→ 用 `lib/ima.py`（需用户自备 ima 凭证；知识库要先在 ima 客户端手工建）
+
+触发任一时，**先读 [references/external-kb.md](references/external-kb.md)** 再按其操作（含凭证配置、批量灌入限速、各场景示例）。
+
+---
+
 ## Agent 执行模型
 
 脚本本身**不调用 LLM**。完整链路：

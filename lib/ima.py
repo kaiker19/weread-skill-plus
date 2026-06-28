@@ -25,12 +25,23 @@ IMA_BASE = "https://ima.qq.com"
 _CTX_VERSION = os.environ.get("IMA_SKILL_VERSION", "1.0")
 
 
+def _read(p):
+    try:
+        return Path(p).read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
 def _creds(client_id=None, api_key=None):
-    cid = client_id or os.environ.get("IMA_CLIENT_ID") or os.environ.get("IMA_OPENAPI_CLIENTID")
-    key = api_key or os.environ.get("IMA_API_KEY") or os.environ.get("IMA_OPENAPI_APIKEY")
+    # 优先级：参数 → 环境变量 → ~/.config/ima/（与官方 ima-skill 同位置，装了就复用）
+    h = Path.home() / ".config" / "ima"
+    cid = (client_id or os.environ.get("IMA_CLIENT_ID") or os.environ.get("IMA_OPENAPI_CLIENTID")
+           or _read(h / "client_id"))
+    key = (api_key or os.environ.get("IMA_API_KEY") or os.environ.get("IMA_OPENAPI_APIKEY")
+           or _read(h / "api_key"))
     if not cid or not key:
         raise RuntimeError("缺少 ima 凭证：设置 IMA_CLIENT_ID 与 IMA_API_KEY"
-                           "（ima.qq.com/agent-interface 获取），或传入参数。")
+                           "（ima.qq.com/agent-interface 获取），或放入 ~/.config/ima/{client_id,api_key}。")
     return cid, key
 
 
