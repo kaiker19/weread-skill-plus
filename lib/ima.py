@@ -63,6 +63,30 @@ def import_note(markdown, folder_name="微信读书", client_id=None, api_key=No
                 client_id, api_key)
 
 
+def list_knowledge_bases(client_id=None, api_key=None):
+    """可添加内容的知识库列表 [{id, name}]。"""
+    r = _api("openapi/wiki/v1/get_addable_knowledge_base_list",
+             {"cursor": "", "limit": 50}, client_id, api_key)
+    return (r.get("data") or {}).get("addable_knowledge_base_list", []) if r.get("code") == 0 else []
+
+
+def add_to_knowledge_base(markdown, knowledge_base_id, title,
+                          folder_name="微信读书", client_id=None, api_key=None):
+    """整本书 markdown → ima 笔记 → 纳入指定知识库（可被 ima AI 问答检索）。
+    两步：import_doc 得 note_id → add_knowledge(media_type=11 笔记)。
+    返回 {note_id, media_id} 或 {error, stage}。"""
+    r1 = import_note(markdown, folder_name, client_id, api_key)
+    if r1.get("code") != 0:
+        return {"error": r1.get("msg"), "stage": "import_doc"}
+    nid = r1["data"]["note_id"]
+    r2 = _api("openapi/wiki/v1/add_knowledge",
+              {"media_type": 11, "title": title, "knowledge_base_id": knowledge_base_id,
+               "note_info": {"content_id": nid}}, client_id, api_key)
+    if r2.get("code") != 0:
+        return {"error": r2.get("msg"), "stage": "add_knowledge", "note_id": nid}
+    return {"note_id": nid, "media_id": (r2.get("data") or {}).get("media_id")}
+
+
 if __name__ == "__main__":
     md = ("# weread-skill-plus 打通测试\n\n"
           "这是一条来自「微信读书个人知识库」的测试笔记，收到即说明 ima 打通成功。")
