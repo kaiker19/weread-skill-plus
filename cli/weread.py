@@ -170,6 +170,7 @@ def _export(args):
     out = Path(args.out).expanduser()
     out.mkdir(parents=True, exist_ok=True)
     n = 0
+    used = set()
     for b in get_all_books():
         bid = b["book_id"]
         hls, revs = get_highlights_for_book(bid), get_reviews_for_book(bid)
@@ -179,10 +180,11 @@ def _export(args):
             tags = [r[0] for r in c.execute(
                 "SELECT DISTINCT tag FROM concepts WHERE book_id=?", (bid,)).fetchall()]
         summ = get_latest_summary("book_completion", book_id=bid)
-        path = out / (_safe_filename(b.get("title") or bid) + ".md")
-        if path.exists():
-            path = out / (_safe_filename(b.get("title") or bid) + f"_{bid}.md")
-        path.write_text(_render_md(b, hls, revs, summ, tags), encoding="utf-8")
+        name = _safe_filename(b.get("title") or bid)
+        if name in used:                 # 仅「同名不同书」才加 book_id 区分；
+            name = f"{name}_{bid}"        # 同一本书重导用同一文件名 → 直接覆盖，不再翻倍
+        used.add(name)
+        (out / (name + ".md")).write_text(_render_md(b, hls, revs, summ, tags), encoding="utf-8")
         n += 1
     print(f"导出 {n} 本书 → {out}/（在 Obsidian 里把该目录作为 vault 或拖进 vault 即可）")
 
