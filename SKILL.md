@@ -65,6 +65,9 @@ python3 ~/.openclaw/workspace/skills/wechat-reading-custom/book_summary/book_sum
 
 **输出**：无新完读书时静默；有则输出 `[AGENT_BOOK_SUMMARY_DATA]` JSON，agent LLM 使用 `prompts/book_summary.md` 合成。
 
+**去重**：脚本输出 payload 后**立即写 `[pending]` 占位**标记已推送，下次不再重复推该书（去重不依赖 agent 回写——agent 合成后可调 `lib/save_summary.py` upsert 覆盖真内容，但即使不回写也不会重复推）。
+> ⚠️ 首次部署本版后，历史上「读完但从未成功回写总结」的书会积压在待推队列。**先跑一次 `book_summary.py --mark-read`** 静默标记这些历史书（不推送），之后每日只推真正新读完的书。否则下一次 cron 会把全部历史读完书一次性推出来。
+
 **JSON 结构**：
 ```json
 {

@@ -145,8 +145,19 @@ _COLD_START_DAYS = 30
 def main():
     backfill = "--backfill" in sys.argv
     run_all = "--all" in sys.argv
+    mark_read = "--mark-read" in sys.argv
 
     sync_all(verbose=False)
+
+    if mark_read:
+        # 一次性清历史积压：把现有所有「读完且无总结」的书标记为已推送（写 pending），不输出。
+        # 部署去重修复后跑一次，避免下一次 cron 把全部历史读完书一次性轰炸出来。
+        n = 0
+        for book in get_newly_finished_books(since_ts=None):
+            save_summary("book_completion", "[pending]", book_id=book["book_id"])
+            n += 1
+        print(f"已标记 {n} 本历史读完书为已处理（本次不推送）。之后每日只推新读完的书。")
+        return
 
     if backfill:
         # 批量回填：所有"读完/有划线且无总结"的书（历史也覆盖）
@@ -181,7 +192,9 @@ def main():
         print("[AGENT_BOOK_SUMMARY_DATA]")
         print(json.dumps(payload, ensure_ascii=False))
         print()
-        # 不再写 [pending] 占位；由 agent 合成后调 lib/save_summary.py 回写真内容。
+        # 立即写 [pending] 占位标记「已推送」——去重不能依赖 agent 回写（agent 不保证调
+        # save_summary），否则该书每天都符合「读完+无总结」被重复推送。agent 合成后回写真内容会 upsert 覆盖它。
+        save_summary("book_completion", "[pending]", book_id=book["book_id"])
 
 
 if __name__ == "__main__":
